@@ -1,16 +1,17 @@
-CPU 386
+CPU 286
 BITS 16
 
-segment	'CODE'
+segment	'code'
 
 OUR_ADDRESS			equ	7C00h
+
 var_data_start		equ	-0Ah
 var_last_fat_sector	equ	-6
 var_reserved		equ	-4
 
 		jmp	short actual_start
 ; -------------------------------------------------------------------------
-		db 90h			; nop -	not used
+			db 90h			; nop -	not used
 os_name				db 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'
 sector_size			dw 200h
 sec_per_cluster		db 1
@@ -51,7 +52,7 @@ actual_start:
 
 no_ext_bios:
 			xor	cx, cx
-			mov	al, byte bp[byte num_of_fats]	; DATA XREF: sub_0+15Ar
+			mov	al, byte bp[byte num_of_fats]
 			cbw
 			cld
 			mul	word bp[byte fat_size]
@@ -94,9 +95,9 @@ no_ext_bios:
 			add	byte [fat_type_jump	+ 1 +7C00h], fat16_continue - fat12_continue
 
 its_fat12:
-			popa			; si - number of root entries
-					; dx:ax	- root start sector
-					; cx - 0
+			popa		; si - number of root entries
+						; dx:ax	- root start sector
+						; cx - 0
 
 read_root:
 			mov	bx, 8600h
@@ -156,35 +157,35 @@ fat12_continue:
 			jmp	short check_last_fat12
 ; ------------------------------------------------------------------------
 
-lower_half_byte:			; CODE XREF: sub_0+10Dj
+lower_half_byte:
 			call	next_cluster_fat12
 			and	ax, 0FFFh
 
-check_last_fat12:			; CODE XREF: sub_0+115j
+check_last_fat12:
 			cmp	ax, 0FF8h
 			jmp	short is_last_cluster
 ; ---------------------------------------------------------------------------
 
-fat16_continue:				; DATA XREF: sub_0+B7t
+fat16_continue:
 			add	ax, ax
 			adc	dx, cx
 			call	next_cluster_fat16
 			cmp	ax, 0FFF8h
 
-is_last_cluster:			; CODE XREF: sub_0+120j
+is_last_cluster:
 			jb	short read_loader_cluster
 			mov	dl, bp[byte drive]
 			retf			; jump to 2000:0 - start of the	loader
 ; -------------------------------------------------------------------------------
 
-file_not_found:				; CODE XREF: sub_0+C7j	sub_0+D5j
+file_not_found:
 			mov	al, missing_file_msg - 100h
 
-message_exit:				; CODE XREF: sub_0+14Aj sub_0+173j
+message_exit:
 			mov	ah, 7Dh
 			xchg	ax, si
 
-print_char:				; CODE XREF: sub_0+146j
+print_char:
 			lodsb
 			cbw
 			inc	ax
@@ -197,20 +198,20 @@ print_char:				; CODE XREF: sub_0+146j
 			jmp	short print_char
 ; --------------------------------------------------------------------------------
 
-print_replace_disk:			; CODE XREF: sub_0+13Aj
+print_replace_disk:
 			mov		al, replace_disk_msg - 100h ; "\r\nReplace the disk"
 			jmp		short message_exit
 ; ---------------------------------------------------------------------------
-disk_error_msg	db 0Dh,	0Ah, 'Disk error'					; DATA XREF: sub_0:disk_error_exitt
+disk_error_msg	db 0Dh,	0Ah, 'Disk error'
 ; ---------------------------------------------------------------------------
 
-wait_exit:				; CODE XREF: sub_0+13Dj
+wait_exit:
 			int	16h		; KEYBOARD -
 			int	19h		; DISK BOOT
 					; causes reboot	of disk	system
 ; --------------------------------------------------------------------------
 missing_file_msg db 0Dh, 0Ah, 'Missing '
-					; DATA XREF: sub_0:file_not_foundt
+
 loader_file_name db 'NTLDR', 6 dup(' ')
 
 ; ---------------------------------------------------------------------------
@@ -221,7 +222,7 @@ disk_error_exit:
 ; --------------------------------------------------------------------------
 
 read_one_sector:
-					; sub_0:read_one_morep
+
 			inc	cx
 
 read_sectors:
@@ -229,7 +230,8 @@ read_sectors:
 						; es:bx	-> buffer
 						; dx:ax	- address of the sector
 						; cx - number of sectors to read
-			push	dword 0
+			push	ds
+			push	ds
 			push	dx
 			push	ax		; 8byte	absolute number	of sector
 			push	es
@@ -253,7 +255,7 @@ read_sectors:
 			ror	ah, 2
 			or	cl, ah
 
-bios_read_command:			; DATA XREF: sub_0+5Ct
+bios_read_command:
 			mov	ax, 201h
 			mov	si, sp		; pointer to DAP packet	in stack
 			mov	dl, bp[byte drive]
@@ -268,17 +270,17 @@ bios_read_command:			; DATA XREF: sub_0+5Ct
 			jnz	short no_addr_overflow
 			inc	dx
 
-no_addr_overflow:			; CODE XREF: sub_0+1ACj
+no_addr_overflow:
 			add	bx, word bp[byte sector_size]
 			loop	read_sectors
 			retn
 ; ----------------------------------------------------------------------------
 
-next_cluster_fat12:			; CODE XREF: sub_0+10Fp
-					; sub_0:lower_half_bytep
+next_cluster_fat12:
+
 			add	ax, bx		; bx = ax / 2
 
-next_cluster_fat16:			; CODE XREF: sub_0+126p
+next_cluster_fat16:
 			mov	bx, 7C00h + 200h
 			div	word bp[byte sector_size]
 			lea	si, [bx+1]
@@ -290,10 +292,10 @@ next_cluster_fat16:			; CODE XREF: sub_0+126p
 			jz	short already_read
 			mov	bp[byte var_last_fat_sector], ax
 
-read_one_more:				; CODE XREF: sub_0+1D6j
+read_one_more:
 			call	read_one_sector
 
-take_fat_record:			; CODE XREF: sub_0+1DFj sub_0+1E2j
+take_fat_record:
 			cmp	si, bx
 			jnb	short read_one_more
 			dec	si
@@ -301,7 +303,7 @@ take_fat_record:			; CODE XREF: sub_0+1DFj sub_0+1E2j
 			retn
 ; ----------------------------------------------------------------------------
 
-already_read:				; CODE XREF: sub_0+1CCj
+already_read:
 			add	bx, word bp[byte sector_size]
 			inc	ax
 			jnz	short take_fat_record
@@ -309,5 +311,5 @@ already_read:				; CODE XREF: sub_0+1CCj
 			jmp	short take_fat_record
 ; ---------------------------------------------------------------------------
 replace_disk_msg	db 0Dh,0Ah,'Replace the disk',0
-		db 'DROOPY', 0
+		db 'DROOPY1', 0
 		db 55h,	0AAh
