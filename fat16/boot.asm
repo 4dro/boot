@@ -3,7 +3,8 @@ BITS 16
 
 segment	'code'
 
-OUR_ADDRESS			equ	7C00h
+OUR_ADDRESS			equ		7C00h
+SEG_ADDRESS_TO_LOAD	equ		2000h
 
 var_data_start		equ	-0Ah
 var_last_fat_sector	equ	-6
@@ -12,6 +13,8 @@ var_reserved		equ	-4
 		jmp	short actual_start
 ; -------------------------------------------------------------------------
 			db 90h			; nop -	not used
+
+; --------------- Bios Parameters Block ------------------------------------
 os_name				db 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'
 sector_size			dw 200h
 sec_per_cluster		db 1
@@ -31,6 +34,7 @@ nt_signature		db 29h
 volume_serial		dd 12345678h
 disk_label			db ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' '
 fs_name				db 'F', 'A', 'T', '1', '2', ' ', ' ', ' '
+
 ; ------------------------------------------------------------------------
 
 actual_start:
@@ -41,30 +45,32 @@ actual_start:
 			mov		bp, sp
 			mov		es, cx
 			mov		ds, cx
-			mov		ah, 41h
-			mov		bx, 55AAh
+
+			mov		ah, 41h				; DISK - check ext read	support
+			mov		bx, 55AAh			; signature
 			mov		bp[byte drive], dl	; rely on drive number sent in dl
-			int		13h		; DISK - check ext read	support
-			jb		short no_ext_bios
+			int		13h
+			jc		short no_ext_bios
 			and		cl, 1
 			jz		short no_ext_bios
-			mov		byte [bios_read_command + 2	+ OUR_ADDRESS], 42h
+			mov		byte [OUR_ADDRESS + bios_read_command + 2], 42h
 
 no_ext_bios:
+; calculate data start secotor
 			xor		cx, cx
 			mov		al, byte bp[byte num_of_fats]
 			cbw
 			cld
-			mul		word bp[byte fat_size]
+			mul		word bp[byte fat_size]		; dx:ax - fats size in sectors
 			xchg	ax, bx
-			xchg	si, dx		; si:bx	-> fat size in sectors
+			xchg	dx, si						; si:bx	-> fat size in sectors
 			mov		ax, word bp[byte reserved_sectors]
 			cwd
 			add		ax, word bp[byte hidden_sectors]
 			adc		dx, word bp[byte hidden_sectors+2]
 			push	dx		; put into var_reserved
 			push	ax
-			add		ax, bx
+			add		ax, bx		; + fat size
 			adc		dx, si
 			mov		si, word bp[byte root_file_entries]
 			push	ax		; init var_last_fat_sector with	root start sector (invalid)
@@ -73,14 +79,15 @@ no_ext_bios:
 			pusha
 			xchg	ax, si
 			cwd
-			shl		ax, 5
+			shl		ax, 5	; multiply by file entry size (32)
 			mov		bx, word bp[byte sector_size]
 			add		ax, bx
 			dec		ax
-			div		bx
+			div		bx		; calculate number of sectors needed for root folder (x + sector_size - 1) / sector size
 			add		word bp[byte var_data_start], ax
 			adc		word bp[byte var_data_start + 2],	cx
-	;calculate total number	of data	clusters
+
+; calculate total number	of data	clusters
 			mov		ax, word bp[byte total_sect_low]
 			or		ax, word bp[byte total_sect_large]
 			mov		dx, word bp[byte total_sect_large + 2]
@@ -90,6 +97,8 @@ no_ext_bios:
 			adc		dx, word bp[byte hidden_sectors + 2]
 			mov		cl, byte bp[byte sec_per_cluster]
 			div		cx		; get number of	clusters
+
+; fat type is defined by number of clusters
 			cmp		ax, 0FF5h
 			jb		short its_fat12
 			add		byte [fat_type_jump	+ 1 + OUR_ADDRESS], fat16_continue - fat12_continue
@@ -106,13 +115,13 @@ read_root:
 
 next_file:
 			cmp		[di], cl
-			jz		short file_not_found
+			je		short file_not_found
 			pusha
 			mov		cl, 11
 			mov		si, loader_file_name + OUR_ADDRESS
 			repe	 cmpsb
 			popa
-			jz		short loader_found
+			je		short loader_found
 			dec		si
 			jz		short file_not_found
 			add		di, 20h
@@ -123,7 +132,7 @@ next_file:
 
 loader_found:
 			mov		ax, [di+1Ah]	; fist cluster start in	file record
-			mov		di, 2000h	; start	address	(segment) to load file to
+			mov		di, SEG_ADDRESS_TO_LOAD	; start	address	(segment) to load file to
 			push	di
 			push	cx
 
@@ -182,7 +191,7 @@ file_not_found:
 			mov		al, missing_file_msg - 100h
 
 message_exit:
-			mov		ah, 7Dh
+			mov		ah, 7Dh			; our address + 100h high byte
 			xchg	ax, si
 
 print_char:
@@ -240,75 +249,75 @@ read_sectors:
 			push	10h		; 42h -	stucture size
 					; DAP block
 			xchg	ax, cx		; save lower address to	cx
-			mov	ax, word bp[byte sec_per_track]
+			mov		ax, word bp[byte sec_per_track]
 			xchg	ax, si
 			xchg	ax, dx		; higher -> ax
 			cwd
-			div	si		; higher address / sectors per track
+			div		si		; higher address / sectors per track
 			xchg	ax, cx		; store	higher result in cx
-			div	si		; lower	address	/ sectors per track
-			inc	dx
+			div		si		; lower	address	/ sectors per track
+			inc		dx
 			xchg	cx, dx		; cx - remainder + 1, dx - higher result
-			div	word bp[byte num_heads]
-			mov	dh, dl		; dh - head (remainder of division)
-			mov	ch, al
-			ror	ah, 2
-			or	cl, ah
+			div		word bp[byte num_heads]
+			mov		dh, dl		; dh - head (remainder of division)
+			mov		ch, al
+			ror		ah, 2
+			or		cl, ah
 
 bios_read_command:
-			mov	ax, 201h
-			mov	si, sp		; pointer to DAP packet	in stack
-			mov	dl, bp[byte drive]
-			int	13h		; DISK - READ SECTORS INTO MEMORY
+			mov		ax, 201h
+			mov		si, sp		; pointer to DAP packet	in stack
+			mov		dl, bp[byte drive]
+			int		13h		; DISK - READ SECTORS INTO MEMORY
 					; AL = number of sectors to read, CH = track, CL = sector
 					; DH = head, DL	= drive, ES:BX -> buffer to fill
 					; Return: CF set on error, AH =	status,	AL = number of sectors read
 			popa
 			popa
-			jb	short disk_error_exit
-			inc	ax		; increase read	address
-			jnz	short no_addr_overflow
-			inc	dx
+			jb		short disk_error_exit
+			inc		ax		; increase read	address
+			jnz		short no_addr_overflow
+			inc		dx
 
 no_addr_overflow:
-			add	bx, word bp[byte sector_size]
+			add		bx, word bp[byte sector_size]
 			loop	read_sectors
 			retn
 ; ----------------------------------------------------------------------------
 
 next_cluster_fat12:
 
-			add	ax, bx		; bx = ax / 2
+			add		ax, bx		; bx = ax / 2
 
 next_cluster_fat16:
-			mov	bx, OUR_ADDRESS + 200h
-			div	word bp[byte sector_size]
-			lea	si, [bx+1]
-			add	si, dx
+			mov		bx, OUR_ADDRESS + 200h
+			div		word bp[byte sector_size]
+			lea		si, [bx+1]
+			add		si, dx
 			cwd
-			add	ax, word bp[byte var_reserved]
-			adc	dx, word bp[byte var_reserved + 2]
-			cmp	ax, bp[byte var_last_fat_sector]
-			jz	short already_read
-			mov	bp[byte var_last_fat_sector], ax
+			add		ax, word bp[byte var_reserved]
+			adc		dx, word bp[byte var_reserved + 2]
+			cmp		ax, bp[byte var_last_fat_sector]
+			jz		short already_read
+			mov		bp[byte var_last_fat_sector], ax
 
 read_one_more:
 			call	read_one_sector
 
 take_fat_record:
-			cmp	si, bx
-			jnb	short read_one_more
-			dec	si
+			cmp		si, bx
+			jnb		short read_one_more
+			dec		si
 			lodsw			; read next cluster word
 			retn
 ; ----------------------------------------------------------------------------
 
 already_read:
-			add	bx, word bp[byte sector_size]
-			inc	ax
-			jnz	short take_fat_record
-			inc	dx
-			jmp	short take_fat_record
+			add		bx, word bp[byte sector_size]
+			inc		ax
+			jnz		short take_fat_record
+			inc		dx
+			jmp		short take_fat_record
 ; ---------------------------------------------------------------------------
 replace_disk_msg	db 0Dh,0Ah,'Replace the disk',0
 		db 'DROOPY1', 0
