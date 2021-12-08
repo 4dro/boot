@@ -5,6 +5,7 @@ segment	'code'
 
 OUR_ADDRESS			equ		7C00h
 SEG_ADDRESS_TO_LOAD	equ		2000h
+ROOT_LOAD_ADDR		equ		8600h
 
 var_data_start		equ	-0Ah
 var_last_fat_sector	equ	-6
@@ -109,7 +110,7 @@ its_fat12:
 						; cx - 0
 
 read_root:
-			mov		bx, 8600h
+			mov		bx, ROOT_LOAD_ADDR
 			mov		di, bx
 			call	read_one_sector
 
@@ -215,9 +216,9 @@ disk_error_msg		db 0Dh,	0Ah, 'Disk error'
 ; ---------------------------------------------------------------------------
 
 wait_exit:
-			int	16h		; KEYBOARD -
-			int	19h		; DISK BOOT
-					; causes reboot	of disk	system
+			int	16h		; wait for a key press
+			int	19h		; reboot the computer
+
 ; --------------------------------------------------------------------------
 missing_file_msg	 db 0Dh, 0Ah, 'Missing '
 
@@ -228,26 +229,32 @@ loader_file_name	 db 'NTLDR', 6 dup(' ')
 disk_error_exit:
 			mov		al, disk_error_msg - 100h
 			jmp		short message_exit
-; --------------------------------------------------------------------------
+
+; -------------- Read sectors procedure ------------------------------------
+			; es:bx	-> buffer
+			; dx:ax	- address of the sector
+			; cx - number of sectors to read
 
 read_one_sector:
 
 			inc		cx
 
 read_sectors:
-			pusha			; Read one sector:
-						; es:bx	-> buffer
-						; dx:ax	- address of the sector
-						; cx - number of sectors to read
-			push	ds
+
+			pusha
+
+; DAP block end
+			push	ds		; 0
 			push	ds
 			push	dx
 			push	ax		; 8byte	absolute number	of sector
 			push	es
 			push	bx		; address to read to
 			push	1		; num sectors
-			push	10h		; 42h -	stucture size
-					; DAP block
+			push	10h		; DAP block size
+; DAP block start
+
+; convert abs address to cylinders, heads and tracks for ah=2 bios API
 			xchg	ax, cx		; save lower address to	cx
 			mov		ax, word bp[byte sec_per_track]
 			xchg	ax, si
@@ -274,7 +281,7 @@ bios_read_command:
 					; Return: CF set on error, AH =	status,	AL = number of sectors read
 			popa
 			popa
-			jb		short disk_error_exit
+			jc		short disk_error_exit
 			inc		ax		; increase read	address
 			jnz		short no_addr_overflow
 			inc		dx
@@ -287,7 +294,7 @@ no_addr_overflow:
 
 next_cluster_fat12:
 
-			add		ax, bx		; bx = ax / 2
+			add		ax, bx		; ax = ax * 1.5
 
 next_cluster_fat16:
 			mov		bx, OUR_ADDRESS + 200h
