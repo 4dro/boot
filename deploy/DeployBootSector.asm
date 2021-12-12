@@ -11,6 +11,7 @@ INVALID_HANDLE_VALUE	equ -1
 extern CloseHandle
 extern GetCommandLineA
 extern GetDriveTypeA
+extern GetDiskFreeSpaceExA
 extern GetLogicalDrives
 extern GetStdHandle
 extern GetVolumeInformationA
@@ -22,13 +23,13 @@ section code
 
 start:
 			cld
-			push dword STD_ERROR_HANDLE
+			push STD_ERROR_HANDLE
 			call GetStdHandle
 			mov [error_handle], eax
 			cmp eax, INVALID_HANDLE_VALUE
             je err_exit
 
-			push dword STD_OUTPUT_HANDLE
+			push STD_OUTPUT_HANDLE
 			call GetStdHandle
 			mov [output_handle], eax
 			cmp eax, INVALID_HANDLE_VALUE
@@ -172,14 +173,35 @@ copy_volume:
 			je name_ended
 			mov ecx[description_string + 24], al
 			inc ecx
-			cmp ecx, 16
+			cmp ecx, 12
 			jb copy_volume
 
 name_ended:
 
 info_error:
+			push 0
+			push total_drive_bytes
+			push 0
+			push drive_path
+			call GetDiskFreeSpaceExA
+			mov edx, drive_size_unknown
+			test eax, eax
+			jz no_total_size
 
-			;GetDiskFreeSpaceExA
+			call convert_disk_size
+
+			mov edx, drive_size_string
+no_total_size:
+			mov edi, description_string + 24 + 12
+			mov ecx, 8
+
+copy_drive_size:
+			mov al, [edx]
+			mov [edi], al
+			inc edx
+			inc edi
+			dec ecx
+			jnz copy_drive_size
 
 			mov eax, [output_handle]
 			mov edx, description_string
@@ -252,6 +274,82 @@ print_message:
 			jz err_exit
 			ret
 
+; ----------------------- Disk size human representaion --------------------------
+
+convert_disk_size:
+			mov eax, [total_drive_bytes + 4]
+			test eax, eax
+			jnz more_than_4G
+			mov eax, [total_drive_bytes]
+			cmp eax, 1024
+			jae more_1K
+			mov cl, 'b'
+			jmp calc_done
+more_1K:
+			cmp eax, 1024 * 1024
+			jae more_1M
+			shr eax, 10
+			adc eax, 0
+			mov cl, 'K'
+			jmp calc_done
+more_1M:
+			cmp eax, 1024 * 1024 * 1024
+			jae more_1G
+			shr eax, 20
+			adc eax, 0
+			mov cl, 'M'
+			jmp calc_done
+more_1G:
+			shr eax, 30
+			adc eax, 0
+			mov cl, 'G'
+			jmp calc_done
+more_than_4G:
+			cmp eax, 256
+			jae more_than_1T
+			shl eax, 2
+			mov edx, [total_drive_bytes]
+			rcl edx, 3
+			adc eax, 0
+			and edx, 3
+			add eax, edx
+			mov cl, 'G'
+			jmp calc_done
+more_than_1T:
+			cmp eax, 256 * 1024
+			jae more_than_1P
+			shr eax, 8
+			adc eax, 0
+			mov cl, 'T'
+			jmp calc_done
+more_than_1P:
+			shr eax, 18
+			adc eax, 0
+			mov cl, 'P'
+calc_done:
+			; eax - number, cl - suffix
+			mov [drive_size_string + 15], cl
+			mov byte [drive_size_string + 14], ' '
+			mov edi, drive_size_string + 13
+next_digit:		
+			xor edx, edx
+			div dword [ten_divisor]
+			add dl, '0'
+			mov [edi], dl
+			dec edi
+			test eax, eax
+			jnz next_digit
+
+			mov edx, drive_size_string
+align_right:
+			mov al, [edi]
+			mov [edx], al
+			inc edi
+			inc edx
+			cmp edx, drive_size_string + 32
+			jb align_right
+			ret
+
 section .data
 error_handle	dd	0
 output_handle	dd	0
@@ -259,9 +357,12 @@ chars_written	dd	0
 filename_size	dd	0
 num_drives		dd	0
 prev_err_mode	dd	0
+ten_divisor		dd	10
 file_system_flags	dd	0
 fs_max_path		dd	0
 fs_serial		dd	0
+total_drive_bytes dd 0, 0
+
 
 drive_types		dd	drive_unknown, drive_nodrive, drive_removable, drive_fixed,
 				dd	drive_network, drive_cdrom, drive_ram
@@ -283,11 +384,13 @@ usage_msg_end:
 file_used_msg	db	'Using boot sector file: '
 file_used_end:
 avail_drives_msg	db	0Dh, 0Ah, 'Available drives:', 0Dh, 0Ah
-	db	'  Name        Type      System                        ', 0Dh, 0Ah
+	db	'  Name        Type      System       Size                 ', 0Dh, 0Ah
 avail_drives_end:
 description_string:
 	db	'    C        Unknown                                      ', 0Dh, 0Ah
 description_str_end:
+drive_size_unknown	db '-', 15 dup(' ')
+drive_size_string	db 32 dup(' ')
 drive_path	db 'A:\', 0
 
 drive_wanted	db	0
