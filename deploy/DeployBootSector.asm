@@ -1,14 +1,21 @@
 BITS 32
 
+SEM_FAILCRITICALERRORS	equ	1
+
 STD_INPUT_HANDLE	equ -10
 STD_OUTPUT_HANDLE	equ -11
 STD_ERROR_HANDLE	equ -12
 
 INVALID_HANDLE_VALUE	equ -1
 
+extern CloseHandle
 extern GetCommandLineA
+extern GetDriveTypeA
+extern GetLogicalDrives
 extern GetStdHandle
+extern GetVolumeInformationA
 extern ExitProcess
+extern SetErrorMode
 extern WriteConsoleA
 
 section code
@@ -27,7 +34,7 @@ start:
 			cmp eax, INVALID_HANDLE_VALUE
             je err_exit
 
-; expecting DeployBootSector.exe [-d <logical drive>] <boot file>
+; expecting DeployBootSector.exe [-d <logical drive>] [-r] [-w <boot file>]
 
 			call GetCommandLineA
 			mov	ebx, eax
@@ -54,8 +61,9 @@ skip_space:
 			je no_arguments
             cmp al, 20h
 			jbe skip_space
-
 			dec ebx
+
+; -------------------- arguments parsing ---------------------------------------------
 			cmp al, '-'
 			jne no_drive_specified
 			cmp byte [ebx+1], 'd'
@@ -92,15 +100,103 @@ cmd_ended:
 			mov ecx, file_used_end - file_used_msg
 			call print_complex
 
+no_arguments:
+; ------------- get available drives ---------------------------------------------
+			push dword SEM_FAILCRITICALERRORS
+			call SetErrorMode
+			mov [prev_err_mode], eax
+
+			call GetLogicalDrives
+			mov dl, 'A'
+			mov ebx, available_drives
+next_bit:
+			test eax, 1
+			jz no_drive
+			mov byte [ebx], dl
+			inc ebx
+no_drive:
+			inc dl
+			shr eax, 1
+			jnz next_bit
+			sub ebx, available_drives
+			mov [num_drives], ebx
+
+			mov eax, [output_handle]
+			mov edx, avail_drives_msg
+			mov ecx, avail_drives_end - avail_drives_msg
+			call print_message
+
+			mov esi, 0
+show_next_drive:
+			cmp esi, [num_drives]
+			jae no_more_drives
+
+			mov al, available_drives[esi]
+			mov [drive_path], al
+			push dword drive_path
+			call GetDriveTypeA
+			cmp eax, 6
+			jbe correct_type
+			mov eax, 0
+correct_type:
+			mov edx, drive_types[eax * 4]
+			mov al, [drive_path]
+			mov [description_string + 4], al
+
+			mov edi, description_string + 13
+			mov ecx, drive_nodrive - drive_unknown
+copy_type_str:
+			mov al, [edx]
+			mov [edi], al
+			inc edx
+			inc edi
+			dec ecx
+			jnz copy_type_str
+
+			push dword 512
+			push fs_name
+			push file_system_flags
+			push filename_size
+			push fs_serial
+			push dword 512
+			push fs_volume_name
+			push drive_path
+			call GetVolumeInformationA
+			test eax, eax
+			jz info_error
+
+			xor ecx, ecx
+copy_volume:
+			mov al, fs_name[ecx]
+			cmp al, 0
+			je name_ended
+			mov ecx[description_string + 24], al
+			inc ecx
+			cmp ecx, 16
+			jb copy_volume
+
+name_ended:
+
+info_error:
+
+			;GetDiskFreeSpaceExA
+
+			mov eax, [output_handle]
+			mov edx, description_string
+			mov ecx, description_str_end - description_string
+			call print_message
+
+			inc esi
+			jmp show_next_drive
+			
+no_more_drives:
+			push dword [prev_err_mode]
+			call SetErrorMode
+
 			xor eax, eax
 			push eax
 			call ExitProcess
 
-no_arguments:
-			mov eax, [output_handle]
-			mov edx, no_filename_msg
-			mov ecx, no_filename_end - no_filename_msg
-			call print_message
 
 print_usage_exit:
 			mov eax, [output_handle]
@@ -161,17 +257,45 @@ error_handle	dd	0
 output_handle	dd	0
 chars_written	dd	0
 filename_size	dd	0
+num_drives		dd	0
+prev_err_mode	dd	0
+file_system_flags	dd	0
+fs_max_path		dd	0
+fs_serial		dd	0
+
+drive_types		dd	drive_unknown, drive_nodrive, drive_removable, drive_fixed,
+				dd	drive_network, drive_cdrom, drive_ram
+drive_unknown	db	'Unknown  '
+drive_nodrive	db	'No drive '
+drive_removable	db	'Removable'
+drive_fixed		db	'Fixed    '
+drive_network	db	'Network  '
+drive_cdrom		db	'CD-ROM   '
+drive_ram		db	'Ram disk '
+
 invalid_arguments_msg	db	'Invalid arguments: '
 invalid_arguments_end:
-no_filename_msg	db	'No boot sector file specified.'
-no_filename_end:
-usage_msg	db	0Dh, 0Ah, 'Expecting: DeployBootSector.exe [-d <logical drive>] <boot sector file>'
+usage_msg	db	0Dh, 0Ah, 'DeployBootSector.exe [-d <logical drive>] [-r] [-w <boot sector file>]'
+	db	0Dh, 0Ah, '-d <logical drive> - Drive name to work with, such as A,C'
+	db	0Dh, 0Ah, '-r - Read (save) previous boot sector of the drive '
+	db	0Dh, 0Ah, '-w <boot sector file> Deploy specified boot sector from the file to the selected drive'
 usage_msg_end:
 file_used_msg	db	'Using boot sector file: '
 file_used_end:
+avail_drives_msg	db	0Dh, 0Ah, 'Available drives:', 0Dh, 0Ah
+	db	'  Name        Type      System                        ', 0Dh, 0Ah
+avail_drives_end:
+description_string:
+	db	'    C        Unknown                                      ', 0Dh, 0Ah
+description_str_end:
+drive_path	db 'A:\', 0
+
 drive_wanted	db	0
 
 section .bss
+available_drives	db 32 dup(?)
+fs_name			db 512 dup(?)
+fs_volume_name	db 512 dup(?)
 boot_file_name	db 512 dup(?)
 err_msg_buffer	db 1024 dup(?)
 err_msg_buffer_end:
