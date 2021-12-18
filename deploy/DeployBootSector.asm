@@ -35,77 +35,70 @@ start:
 			cmp eax, INVALID_HANDLE_VALUE
             je err_exit
 
-; expecting DeployBootSector.exe [-d <logical drive>] [-r] [-w <boot file>]
+			push dword SEM_FAILCRITICALERRORS
+			call SetErrorMode
+			mov [prev_err_mode], eax
 
-			call GetCommandLineA
-			mov	ebx, eax
-			xor edx, edx	; double quotes indicator
-			cmp byte [ebx], '"'
-			jne skip_name
-			inc edx
-			inc ebx
-skip_name:
-			mov al, [ebx]
-			inc ebx
-			cmp al, '"'
-			je skip_space
-			cmp al, 20h
-			ja skip_name
-			cmp al, 0
-			je no_arguments
-			test edx, edx	; we are inside double quotes
-			jnz skip_name
-skip_space:
-			mov al, [ebx]
-			inc ebx
-			cmp al, 0
-			je no_arguments
-            cmp al, 20h
-			jbe skip_space
-			dec ebx
+			call parse_arguments
+			test ebx, ebx
+			jz args_ok
 
-; -------------------- arguments parsing ---------------------------------------------
-			cmp al, '-'
-			jne no_drive_specified
-			cmp byte [ebx+1], 'd'
-			jne invalid_arguments
-			cmp byte [ebx+1], 0
-			je invalid_arguments
-			
+			mov esi, invalid_arguments_msg
+			mov ecx, invalid_arguments_end - invalid_arguments_msg
+			call print_complex
+			jmp print_usage_exit
 
-no_drive_specified:
-			; ebx -> file name expected
-			xor ecx, ecx
-			mov esi, ebx
-			mov edi, boot_file_name
-copy_filename:
-			mov al, [ebx + ecx]
-			mov [edi + ecx], al
-			inc ecx
-			cmp al, 20h
-			ja copy_filename
-			mov [filename_size], ecx
-			cmp al, 0
-			je cmd_ended
-			mov byte [edi + ecx - 1], 0	; end filename
-check_no_more:
-			mov al, [ebx + ecx]
-			inc ecx
-			cmp al, 20h
-			ja invalid_arguments
-			cmp al, 0
-			jne check_no_more
-cmd_ended:
+args_ok:
+			mov ebx, drive_parameter
+			mov esi, drive_specified_msg
+			mov ecx, drive_specified_end - drive_specified_msg
+			call print_complex
+
+			mov ebx, save_file_name
+			mov esi, save_file_msg
+			mov ecx, save_file_end - save_file_msg
+			call print_complex
+
 			mov ebx, boot_file_name
 			mov esi, file_used_msg
 			mov ecx, file_used_end - file_used_msg
 			call print_complex
 
-no_arguments:
-; ------------- get available drives ---------------------------------------------
-			push dword SEM_FAILCRITICALERRORS
+			cmp byte [drive_parameter], 0
+			je no_drive_specified
+			cmp byte [drive_parameter + 1], 0
+			je drive_specified
+
+			mov ebx, drive_parameter
+			mov esi, invalid_drive_msg
+			mov ecx, invalid_drive_end - invalid_drive_msg
+			call print_complex
+
+no_drive_specified:
+			call show_drives_info
+
+drive_specified:
+			push dword [prev_err_mode]
 			call SetErrorMode
-			mov [prev_err_mode], eax
+
+			xor eax, eax
+			push eax
+			call ExitProcess
+
+
+print_usage_exit:
+			mov eax, [output_handle]
+			mov edx, usage_msg
+			mov ecx, usage_msg_end - usage_msg
+			call print_message
+
+err_exit:
+			push dword 1
+			call ExitProcess
+
+; ------------- get available drives ---------------------------------------------
+
+show_drives_info:
 
 			call GetLogicalDrives
 			mov dl, 'A'
@@ -192,7 +185,7 @@ info_error:
 
 			mov edx, drive_size_string
 no_total_size:
-			mov edi, description_string + 24 + 12
+			mov edi, description_string + 24 + 10
 			mov ecx, 8
 
 copy_drive_size:
@@ -210,33 +203,115 @@ copy_drive_size:
 
 			inc esi
 			jmp show_next_drive
-			
+
 no_more_drives:
-			push dword [prev_err_mode]
-			call SetErrorMode
+			ret
 
-			xor eax, eax
-			push eax
-			call ExitProcess
+; -------------------- Parse arguments --------------------------------------------
+; expecting DeployBootSector.exe [-d <logical drive>] [-r] [-w <boot file>]
 
+parse_arguments:
+			mov al, 0
+			mov [boot_file_name], al
+			mov [drive_parameter], al
+			mov [save_file_name], al
 
-print_usage_exit:
-			mov eax, [output_handle]
-			mov edx, usage_msg
-			mov ecx, usage_msg_end - usage_msg
-			call print_message
+			call GetCommandLineA
+			mov	ebx, eax
+			; skip program name
+			mov edi, program_name
+			call store_option
 
-err_exit:
-			push dword 1
-			call ExitProcess
+; -------------------- start arguments parsing ---------------------------------------------
+next_argument:
+			mov al, [ebx]
+			cmp al, 0
+			je no_arguments
+			cmp al, '-'
+			jne invalid_arguments
+			mov al, [ebx + 1]
+			cmp al, 0
+			je invalid_arguments
+			cmp al, 'd'
+			je d_option
+			cmp al, 'r'
+			je r_option
+			cmp al, 'w'
+			jne invalid_arguments
+w_option:
+			add ebx, 2
+			mov edi, boot_file_name
+			call store_option
+			jmp next_argument
+d_option:
+			add ebx, 2
+			mov edi, drive_parameter
+			call store_option
+			jmp next_argument
+r_option:
+			add ebx, 2
+			mov edi, save_file_name
+			call store_option
+			jmp next_argument
+
+no_arguments:
+			xor ebx, ebx
+			ret
 
 ; -----------------------------------------------------------------------------
 invalid_arguments:		; ebx -> cmd arguments
+			ret
 
-			mov esi, invalid_arguments_msg
-			mov ecx, invalid_arguments_end - invalid_arguments_msg
-			call print_complex
-			jmp print_usage_exit
+; -----------------------------------------------------------------------------
+; ebx -> current cmd line position
+; edi -> buffer to store the parameter (256 bytes)
+; return
+; ebx -> next non-blank argument
+; al - next character (0 indicates the end)
+store_option:
+			xor edx, edx	; double quotes indicator
+skip_leading_space:
+			mov al, [ebx]
+			inc ebx
+			cmp al, 0
+			je no_cmd_at_all
+			cmp al, 20h
+			jbe skip_leading_space
+			dec ebx
+			cmp byte [ebx], '"'
+			jne skip_name
+			inc edx
+			inc ebx
+skip_name:
+			mov al, [ebx]
+			inc ebx
+			mov [edi], al
+			inc edi
+			cmp al, '"'
+			je param_ended
+			cmp al, 20h
+			ja skip_name
+			cmp al, 0
+			je cmd_ended
+			test edx, edx	; we are inside double quotes
+			jnz skip_name
+param_ended:
+			xor edx, edx
+skip_space:
+			mov al, [ebx]
+			inc ebx
+			cmp al, 0
+			je cmd_ended
+            cmp al, 20h
+			jbe skip_space
+
+cmd_ended:
+			mov byte [edi - 1], 0
+
+no_cmd_at_all:
+			dec ebx
+			ret
+; -----------------------------------------------------------------------------
 
 ; ebx -> null terminated second string
 ; esi -> first message
@@ -328,10 +403,10 @@ more_than_1P:
 			mov cl, 'P'
 calc_done:
 			; eax - number, cl - suffix
-			mov [drive_size_string + 15], cl
-			mov byte [drive_size_string + 14], ' '
-			mov edi, drive_size_string + 13
-next_digit:		
+			mov [drive_size_string + 7], cl
+			mov byte [drive_size_string + 6], ' '
+			mov edi, drive_size_string + 5
+next_digit:
 			xor edx, edx
 			div dword [ten_divisor]
 			add dl, '0'
@@ -340,14 +415,12 @@ next_digit:
 			test eax, eax
 			jnz next_digit
 
-			mov edx, drive_size_string
-align_right:
-			mov al, [edi]
-			mov [edx], al
-			inc edi
-			inc edx
-			cmp edi, drive_size_string + 32
-			jb align_right
+			mov al, ' '
+pad_right:
+			mov [edi], al
+			dec edi
+			cmp edi, drive_size_string
+			jae pad_right
 			ret
 
 section .data
@@ -380,9 +453,17 @@ usage_msg	db	0Dh, 0Ah, 'DeployBootSector.exe [-d <logical drive>] [-r] [-w <boot
 	db	0Dh, 0Ah, '-d <logical drive> - Drive name to work with, such as A,C'
 	db	0Dh, 0Ah, '-r - Read (save) previous boot sector of the drive '
 	db	0Dh, 0Ah, '-w <boot sector file> Deploy specified boot sector from the file to the selected drive'
+
 usage_msg_end:
-file_used_msg	db	'Using boot sector file: '
+drive_specified_msg	db	'Drive requested: '
+drive_specified_end:
+save_file_msg	db	0Dh, 0Ah, 'File to save bootsector: '
+save_file_end:
+file_used_msg	db	0Dh, 0Ah, 'Boot sector file to write: '
 file_used_end:
+invalid_drive_msg	db	0dh, 0ah, 'Invalid drive letter: '
+invalid_drive_end
+
 avail_drives_msg	db	0Dh, 0Ah, 'Available drives:', 0Dh, 0Ah
 	db	'  Name        Type      System       Size                 ', 0Dh, 0Ah
 avail_drives_end:
@@ -390,13 +471,17 @@ description_string:
 	db	'    C        Unknown                                      ', 0Dh, 0Ah
 description_str_end:
 drive_size_unknown	db '-', 15 dup(' ')
-drive_size_string	db 32 dup(' ')
+drive_size_string	db 8 dup(' ')
 drive_path	db 'A:\', 0
 
 drive_wanted	db	0
 
 section .bss
 available_drives	db 32 dup(?)
+program_name	db	256 dup(?)
+drive_parameter	db	256 dup(?)
+save_file_name	db	256 dup(?)
+
 fs_name			db 512 dup(?)
 fs_volume_name	db 512 dup(?)
 boot_file_name	db 512 dup(?)
