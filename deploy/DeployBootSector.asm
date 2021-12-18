@@ -346,7 +346,7 @@ align_right:
 			mov [edx], al
 			inc edi
 			inc edx
-			cmp edx, drive_size_string + 32
+			cmp edi, drive_size_string + 32
 			jb align_right
 			ret
 

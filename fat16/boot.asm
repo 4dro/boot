@@ -4,11 +4,12 @@ BITS 16
 segment	'code'
 
 OUR_ADDRESS			equ		7C00h
+ROOT_LOAD_ADDR		equ		OUR_ADDRESS + 0A00h
+
 SEG_ADDRESS_TO_LOAD	equ		2000h
-ROOT_LOAD_ADDR		equ		8600h
 
 var_data_start		equ	-0Ah
-var_last_fat_sector	equ	-6
+cached_fat_sector	equ	-6
 var_reserved		equ	-4
 
 		jmp	short actual_start
@@ -39,7 +40,7 @@ fs_name				db 'F', 'A', 'T', '1', '2', ' ', ' ', ' '
 ; ------------------------------------------------------------------------
 
 actual_start:
-			xor	cx, cx
+			xor		cx, cx
 
 			mov		ss, cx
 			mov		sp, OUR_ADDRESS
@@ -74,7 +75,7 @@ no_ext_bios:
 			add		ax, bx		; + fat size
 			adc		dx, si
 			mov		si, word bp[byte root_file_entries]
-			push	ax		; init var_last_fat_sector with	root start sector (invalid)
+			push	ax		; init cached_fat_sector with	root start sector (invalid)
 			push	dx		; put root start (dx:ax) into var_datastart
 			push	ax
 			pusha
@@ -265,7 +266,7 @@ read_sectors:
 			div		si		; lower	address	/ sectors per track
 			inc		dx
 			xchg	cx, dx		; cx - remainder + 1, dx - higher result
-			div		word bp[byte num_heads]
+			div		word bp [byte num_heads]
 			mov		dh, dl		; dh - head (remainder of division)
 			mov		ch, al
 			ror		ah, 2
@@ -287,7 +288,7 @@ bios_read_command:
 			inc		dx
 
 no_addr_overflow:
-			add		bx, word bp[byte sector_size]
+			add		bx, word bp [byte sector_size]
 			loop	read_sectors
 			retn
 ; ----------------------------------------------------------------------------
@@ -298,15 +299,15 @@ next_cluster_fat12:
 
 next_cluster_fat16:
 			mov		bx, OUR_ADDRESS + 200h
-			div		word bp[byte sector_size]
+			div		word bp [byte sector_size]
 			lea		si, [bx+1]
 			add		si, dx
 			cwd
-			add		ax, word bp[byte var_reserved]
-			adc		dx, word bp[byte var_reserved + 2]
-			cmp		ax, bp[byte var_last_fat_sector]
+			add		ax, word bp [byte var_reserved]
+			adc		dx, word bp [byte var_reserved + 2]
+			cmp		ax, bp [byte cached_fat_sector]
 			jz		short already_read
-			mov		bp[byte var_last_fat_sector], ax
+			mov		bp [byte cached_fat_sector], ax
 
 read_one_more:
 			call	read_one_sector
