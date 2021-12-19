@@ -2,20 +2,43 @@ BITS 32
 
 SEM_FAILCRITICALERRORS	equ	1
 
+ENABLE_PROCESSED_INPUT	equ		0001h
+ENABLE_LINE_INPUT		equ		0002h
+ENABLE_ECHO_INPUT		equ		0004h
+ENABLE_INSERT_MODE		equ		0020h
+ENABLE_QUICK_EDIT_MODE	equ		0040h
+
+OUR_MODE	equ	ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT	| ENABLE_ECHO_INPUT | ENABLE_INSERT_MODE
+
+GENERIC_READ	equ 80000000h
+
+FILE_SHARE_READ		equ	1
+FILE_SHARE_WRITE	equ 2
+
+OPEN_EXISTING		equ	3
+
 STD_INPUT_HANDLE	equ -10
 STD_OUTPUT_HANDLE	equ -11
 STD_ERROR_HANDLE	equ -12
 
 INVALID_HANDLE_VALUE	equ -1
 
+ERROR_FILE_NOT_FOUND	equ	2
+ERROR_ACCESS_DENIED		equ	5
+
 extern CloseHandle
+extern CreateFileA
 extern GetCommandLineA
+extern GetConsoleMode
 extern GetDriveTypeA
 extern GetDiskFreeSpaceExA
+extern GetLastError
 extern GetLogicalDrives
 extern GetStdHandle
 extern GetVolumeInformationA
 extern ExitProcess
+extern ReadConsoleA
+extern SetConsoleMode
 extern SetErrorMode
 extern WriteConsoleA
 
@@ -35,9 +58,27 @@ start:
 			cmp eax, INVALID_HANDLE_VALUE
             je err_exit
 
+			push STD_INPUT_HANDLE
+			call GetStdHandle
+			mov [input_handle], eax
+			cmp eax, INVALID_HANDLE_VALUE
+            je err_exit
+
 			push dword SEM_FAILCRITICALERRORS
 			call SetErrorMode
 			mov [prev_err_mode], eax
+
+			push old_console_mode
+			push dword [input_handle]
+			call GetConsoleMode
+			test eax, eax
+			jz err_exit
+
+			push OUR_MODE
+			push dword [input_handle]
+			call SetConsoleMode
+			test eax, eax
+			jz err_exit
 
 			call parse_arguments
 			test ebx, ebx
@@ -49,6 +90,38 @@ start:
 			jmp print_usage_exit
 
 args_ok:
+
+			cmp byte [drive_parameter], 0
+			jne drive_specified
+
+			call show_drives_info
+
+			mov eax, [output_handle]
+			mov edx, select_drive_msg
+			mov ecx, select_drive_end - select_drive_msg
+			call print_message
+
+			push 0
+			push num_chars_read
+			push 256
+			push console_read_buffer
+			push dword [input_handle]
+			call ReadConsoleA
+
+			mov ecx, [num_chars_read]
+			mov esi, console_read_buffer
+			mov edi, drive_parameter
+copy_input:
+			lodsb
+			cmp al, 0Dh
+			je eol_met
+			stosb
+			loop copy_input
+eol_met:
+			mov byte [edi], 0
+
+drive_specified:
+
 			mov ebx, drive_parameter
 			mov esi, drive_specified_msg
 			mov ecx, drive_specified_end - drive_specified_msg
@@ -64,20 +137,52 @@ args_ok:
 			mov ecx, file_used_end - file_used_msg
 			call print_complex
 
-			cmp byte [drive_parameter], 0
-			je no_drive_specified
+			mov al, [drive_parameter]
+			and al, 0DFh	; to uppercase
+			mov [drive_wanted], al
+			cmp al, 'A'
+			jb wrong_drive
+			cmp al, 'Z'
+			ja wrong_drive
 			cmp byte [drive_parameter + 1], 0
-			je drive_specified
+			je drive_ok
 
+wrong_drive:
 			mov ebx, drive_parameter
 			mov esi, invalid_drive_msg
 			mov ecx, invalid_drive_end - invalid_drive_msg
 			call print_complex
 
-no_drive_specified:
-			call show_drives_info
+			jmp err_exit
 
-drive_specified:
+drive_ok:
+			; try to read bootsector
+			push 0
+			push 0			; flags and attributes
+			push OPEN_EXISTING
+			push 0			; lpSecurityAttributes
+			push FILE_SHARE_READ | FILE_SHARE_WRITE
+			push GENERIC_READ
+			push device_name
+			call CreateFileA
+			mov [drive_handle], eax
+			cmp eax, INVALID_HANDLE_VALUE
+			je print_usage_exit
+
+			push dword [drive_handle]
+			call CloseHandle
+
+			cmp byte [save_file_name], 0
+			je normal_exit
+
+
+
+normal_exit:
+
+			push dword [old_console_mode]
+			push dword [input_handle]
+			call SetConsoleMode
+
 			push dword [prev_err_mode]
 			call SetErrorMode
 
@@ -87,10 +192,13 @@ drive_specified:
 
 
 print_usage_exit:
+			call print_last_error
+
 			mov eax, [output_handle]
 			mov edx, usage_msg
 			mov ecx, usage_msg_end - usage_msg
 			call print_message
+			jmp normal_exit
 
 err_exit:
 			push dword 1
@@ -423,9 +531,34 @@ pad_right:
 			jae pad_right
 			ret
 
+; ------------------ Print last error ------------------------------------------
+print_last_error:
+			call GetLastError
+			mov ebx, eax
+			mov ecx, 8
+letter_loop:
+			mov eax, ebx
+			and eax, 0Fh
+			mov al, [hex_letters + eax]
+			shr ebx, 4
+			mov [last_error_code + ecx - 1], al
+			loop letter_loop
+
+			mov eax, [output_handle]
+			mov edx, last_error_msg
+			mov ecx, last_error_end - last_error_msg
+			call print_message
+
+			ret
+
 section .data
 error_handle	dd	0
 output_handle	dd	0
+input_handle	dd	0
+
+drive_handle	dd	0
+old_console_mode	dd	0
+num_chars_read	dd	0
 chars_written	dd	0
 filename_size	dd	0
 num_drives		dd	0
@@ -461,8 +594,14 @@ save_file_msg	db	0Dh, 0Ah, 'File to save bootsector: '
 save_file_end:
 file_used_msg	db	0Dh, 0Ah, 'Boot sector file to write: '
 file_used_end:
-invalid_drive_msg	db	0dh, 0ah, 'Invalid drive letter: '
-invalid_drive_end
+invalid_drive_msg	db	0Dh, 0Ah, 'Invalid drive letter: '
+invalid_drive_end:
+select_drive_msg	db 'Please select the drive name (A-Z) and press Enter', 0Dh, 0Ah
+select_drive_end:
+hex_letters	db	'01234567890ABCDF'
+last_error_msg	db	'Last error: '
+last_error_code	db	8 dup(' '), 0Dh, 0Ah
+last_error_end:
 
 avail_drives_msg	db	0Dh, 0Ah, 'Available drives:', 0Dh, 0Ah
 	db	'  Name        Type      System       Size                 ', 0Dh, 0Ah
@@ -474,7 +613,8 @@ drive_size_unknown	db '-', 15 dup(' ')
 drive_size_string	db 8 dup(' ')
 drive_path	db 'A:\', 0
 
-drive_wanted	db	0
+device_name		db	'\\.\'
+drive_wanted	db	'A:', 0
 
 section .bss
 available_drives	db 32 dup(?)
@@ -487,3 +627,4 @@ fs_volume_name	db 512 dup(?)
 boot_file_name	db 512 dup(?)
 err_msg_buffer	db 1024 dup(?)
 err_msg_buffer_end:
+console_read_buffer	db	256 dup(?)
