@@ -2,6 +2,10 @@ BITS 32
 
 SEM_FAILCRITICALERRORS	equ	1
 
+FILE_BEGIN		equ	0
+
+FILE_ATTRIBUTE_NORMAL	equ	80h
+
 ENABLE_PROCESSED_INPUT	equ		0001h
 ENABLE_LINE_INPUT		equ		0002h
 ENABLE_ECHO_INPUT		equ		0004h
@@ -10,11 +14,13 @@ ENABLE_QUICK_EDIT_MODE	equ		0040h
 
 OUR_MODE	equ	ENABLE_PROCESSED_INPUT | ENABLE_LINE_INPUT	| ENABLE_ECHO_INPUT | ENABLE_INSERT_MODE
 
+GENERIC_WRITE	equ	40000000h
 GENERIC_READ	equ 80000000h
 
 FILE_SHARE_READ		equ	1
 FILE_SHARE_WRITE	equ 2
 
+CREATE_ALWAYS		equ	2
 OPEN_EXISTING		equ	3
 
 STD_INPUT_HANDLE	equ -10
@@ -38,9 +44,12 @@ extern GetStdHandle
 extern GetVolumeInformationA
 extern ExitProcess
 extern ReadConsoleA
+extern ReadFile
 extern SetConsoleMode
 extern SetErrorMode
+extern SetFilePointer
 extern WriteConsoleA
+extern WriteFile
 
 section code
 
@@ -167,7 +176,40 @@ drive_ok:
 			call CreateFileA
 			mov [drive_handle], eax
 			cmp eax, INVALID_HANDLE_VALUE
-			je print_usage_exit
+			jne successfully_opened
+
+			call print_last_error
+			jmp normal_exit
+
+successfully_opened:
+			push FILE_BEGIN
+			push 0
+			push 0
+			push dword [drive_handle]
+			call SetFilePointer
+			test eax, eax
+			jnz error_occured
+
+			push 0
+			push bytes_read
+			push 512
+			push sector_buffer
+			push dword [drive_handle]
+			call ReadFile
+			test eax, eax
+			jz error_occured
+			cmp dword [bytes_read], 512
+			je successfully_read
+
+error_occured:
+			call print_last_error
+
+			push dword [drive_handle]
+			call CloseHandle
+			jmp normal_exit
+
+successfully_read:
+			mov byte [sector_read], 1
 
 			push dword [drive_handle]
 			call CloseHandle
@@ -175,8 +217,30 @@ drive_ok:
 			cmp byte [save_file_name], 0
 			je normal_exit
 
+			; save boot sector to the file
 
+			push 0
+			push FILE_ATTRIBUTE_NORMAL			; flags and attributes
+			push CREATE_ALWAYS
+			push 0			; lpSecurityAttributes
+			push 0			; share mode
+			push GENERIC_WRITE
+			push save_file_name
+			call CreateFileA
+			cmp eax, INVALID_HANDLE_VALUE
+			je normal_exit
 
+			mov [save_file_handle], eax
+
+			push 0
+			push bytes_read
+			push 512
+			push sector_buffer
+			push dword [save_file_handle]
+			call WriteFile
+
+			push dword [save_file_handle]
+			call CloseHandle
 normal_exit:
 
 			push dword [old_console_mode]
@@ -192,7 +256,6 @@ normal_exit:
 
 
 print_usage_exit:
-			call print_last_error
 
 			mov eax, [output_handle]
 			mov edx, usage_msg
@@ -568,7 +631,8 @@ file_system_flags	dd	0
 fs_max_path		dd	0
 fs_serial		dd	0
 total_drive_bytes dd 0, 0
-
+bytes_read		dd	0
+save_file_handle	dd	0
 
 drive_types		dd	drive_unknown, drive_nodrive, drive_removable, drive_fixed,
 				dd	drive_network, drive_cdrom, drive_ram
@@ -580,6 +644,7 @@ drive_network	db	'Network  '
 drive_cdrom		db	'CD-ROM   '
 drive_ram		db	'Ram disk '
 
+sector_read		db	0
 invalid_arguments_msg	db	'Invalid arguments: '
 invalid_arguments_end:
 usage_msg	db	0Dh, 0Ah, 'DeployBootSector.exe [-d <logical drive>] [-r] [-w <boot sector file>]'
@@ -621,6 +686,7 @@ available_drives	db 32 dup(?)
 program_name	db	256 dup(?)
 drive_parameter	db	256 dup(?)
 save_file_name	db	256 dup(?)
+sector_buffer	db	512 dup(?)
 
 fs_name			db 512 dup(?)
 fs_volume_name	db 512 dup(?)
