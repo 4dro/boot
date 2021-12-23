@@ -1,0 +1,1 @@
+d:/programs/nasm/nasm.exe osloader.asm -o osloader

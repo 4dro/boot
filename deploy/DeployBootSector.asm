@@ -214,10 +214,25 @@ successfully_read:
 			push dword [drive_handle]
 			call CloseHandle
 
-			cmp byte [save_file_name], 0
-			je normal_exit
+			mov al, [boot_file_name]
+			or al, [save_file_name]
+			jz normal_exit
 
-			; save boot sector to the file
+			; need to save boot sector to the file
+			cmp byte [save_file_name], 0
+			jne name_provided
+
+			mov esi, default_save_file
+			mov edi, save_file_name
+copy_default_name:
+			mov al, [esi]
+			mov [edi], al
+			inc esi
+			inc edi
+			test al, al
+			jnz copy_default_name
+
+name_provided:
 
 			push 0
 			push FILE_ATTRIBUTE_NORMAL			; flags and attributes
@@ -241,6 +256,56 @@ successfully_read:
 
 			push dword [save_file_handle]
 			call CloseHandle
+
+deploy_sector:
+			cmp byte [boot_file_name], 0
+			je normal_exit
+
+			cmp byte [sector_buffer + 10h], 0	; number of fats, zero on ntfs
+			je not_a_fat
+
+			; cmp byte [sector_buffer + 26h], 29h	; signature for fat12/16
+			; jne not_a_fat
+			; cmp byte [sector_buffer + 42h], 29h	; signature for fat32
+			; jne not_a_fat
+
+			push 0
+			push FILE_ATTRIBUTE_NORMAL			; flags and attributes
+			push OPEN_EXISTING
+			push 0			; lpSecurityAttributes
+			push FILE_SHARE_READ			; share mode
+			push GENERIC_READ
+			push boot_file_name
+			call CreateFileA
+			mov [boot_file_handle], eax
+			cmp eax, INVALID_HANDLE_VALUE
+			jne opened_write_file
+
+			call print_last_error
+			jmp err_exit
+
+opened_write_file:
+
+			push 0
+			push bytes_read
+			push 516
+			push write_buffer
+			push dword [drive_handle]
+			call ReadFile
+			test eax, eax
+			jz err_exit
+
+			cmp dword [bytes_read], 512
+			je file_size_ok
+
+			jmp err_exit
+file_size_ok:
+
+			push dword [boot_file_handle]
+			call CloseHandle
+
+not_a_fat:
+
 normal_exit:
 
 			push dword [old_console_mode]
@@ -264,7 +329,14 @@ print_usage_exit:
 			jmp normal_exit
 
 err_exit:
+			push dword [old_console_mode]
+			push dword [input_handle]
+			call SetConsoleMode
+
+			push dword [prev_err_mode]
+			call SetErrorMode
 			push dword 1
+
 			call ExitProcess
 
 ; ------------- get available drives ---------------------------------------------
@@ -633,6 +705,7 @@ fs_serial		dd	0
 total_drive_bytes dd 0, 0
 bytes_read		dd	0
 save_file_handle	dd	0
+boot_file_handle	dd	0
 
 drive_types		dd	drive_unknown, drive_nodrive, drive_removable, drive_fixed,
 				dd	drive_network, drive_cdrom, drive_ram
@@ -664,6 +737,7 @@ invalid_drive_end:
 select_drive_msg	db 'Please select the drive name (A-Z) and press Enter', 0Dh, 0Ah
 select_drive_end:
 hex_letters	db	'01234567890ABCDF'
+default_save_file	db	'old.bin', 0
 last_error_msg	db	'Last error: '
 last_error_code	db	8 dup(' '), 0Dh, 0Ah
 last_error_end:
@@ -687,6 +761,7 @@ program_name	db	256 dup(?)
 drive_parameter	db	256 dup(?)
 save_file_name	db	256 dup(?)
 sector_buffer	db	512 dup(?)
+write_buffer	db	516 dup(?)
 
 fs_name			db 512 dup(?)
 fs_volume_name	db 512 dup(?)

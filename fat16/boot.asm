@@ -223,7 +223,7 @@ wait_exit:
 ; --------------------------------------------------------------------------
 missing_file_msg	 db 0Dh, 0Ah, 'Missing '
 
-loader_file_name	 db 'NTLDR', 6 dup(' ')
+loader_file_name	 db 'OSLOADER', 3 dup(' ')
 
 ; ---------------------------------------------------------------------------
 
