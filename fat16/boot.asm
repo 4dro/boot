@@ -217,7 +217,8 @@ disk_error_msg		db 0Dh,	0Ah, 'Disk error'
 ; ---------------------------------------------------------------------------
 
 wait_exit:
-			int	16h		; wait for a key press
+			; ax is always 0 here
+			int	16h		; ah = 0, wait for a key press
 			int	19h		; reboot the computer
 
 ; --------------------------------------------------------------------------

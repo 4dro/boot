@@ -47,7 +47,7 @@ align_ok:
 
 		; convert our base address into hex string
 		mov cx, 4
-		mov di, addr_string
+		mov di, addr_string + 3
 
 address_to_hex:
 		mov bx, ax
@@ -55,7 +55,7 @@ address_to_hex:
 		and bx, 0Fh
 		mov dl, [bx + hex_chars]
 		mov [di], dl
-		inc di
+		dec di
 		loop address_to_hex
 
 		mov si, greetings
@@ -87,6 +87,7 @@ no_overflow:
 		call print_string
 
 press_key_and_reboot:
+		mov ah, 0
 		int 16h
 		int 19h
 
@@ -138,11 +139,11 @@ string_ended:
 align 4
 base_address	dw	0
 hex_chars		db	'0123456789ABCDF'
-greetings	db	'OS loader has started', 0Dh, 0Ah, 0
-invalid_load	db	'Loaded at invalid address', 0Dh, 0Ah, 0
-loaded_at_addr	db	'Loaded at address: '
+greetings		db	'osloader has started', 0Dh, 0Ah, 0
+invalid_load	db	'osloader is loaded out of segment boundary', 0Dh, 0Ah, 0
+loaded_at_addr	db	'osloader is loaded at address: '
 addr_string		db 4 dup(' '), 0Dh, 0Ah, 0
-all_loaded_msg	db 'All program sectors are loaded.', 0Dh, 0Ah, 0
+all_loaded_msg	db 'All program sectors are loaded into the memory.', 0Dh, 0Ah, 0
 sector_msg		db 'Sector '
 sector_str		db 4 dup(' '), 0
 not_loaded_msg	db ' is NOT LOADED!', 0Dh, 0Ah, 0
