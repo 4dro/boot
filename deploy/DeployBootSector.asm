@@ -257,7 +257,8 @@ name_provided:
 			push dword [save_file_handle]
 			call CloseHandle
 
-deploy_sector:
+; ------------------- Check if we need to deploy ------------------------------------
+
 			cmp byte [boot_file_name], 0
 			je normal_exit
 
@@ -269,6 +270,7 @@ deploy_sector:
 			; cmp byte [sector_buffer + 42h], 29h	; signature for fat32
 			; jne not_a_fat
 
+its_fat_on_drive:
 			push 0
 			push FILE_ATTRIBUTE_NORMAL			; flags and attributes
 			push OPEN_EXISTING
@@ -290,17 +292,84 @@ opened_write_file:
 			push bytes_read
 			push 516
 			push write_buffer
-			push dword [drive_handle]
+			push dword [boot_file_handle]
 			call ReadFile
 			test eax, eax
-			jz err_exit
+			jz boot_file_failed
 
 			cmp dword [bytes_read], 512
-			je file_size_ok
+			jne boot_file_failed
+
+			cmp word [write_buffer + 1FEh], 0AA55h
+			je boot_file_ok
+
+boot_file_failed:
+			call print_last_error
+			push dword [boot_file_handle]
+			call CloseHandle
 
 			jmp err_exit
-file_size_ok:
+boot_file_ok:
+			push dword [boot_file_handle]
+			call CloseHandle
 
+; --------------- Merge the content of boot sector with the file ---------------------------
+
+			; Copy Bios parameters block for FAT 16 (03 - 3E)
+			mov edi, write_buffer + 3
+			mov esi, sector_buffer + 3
+			mov ecx, 3Eh - 3
+			rep movsb
+
+;---------------- Write the bootsector file ---------------------------------------------
+
+			push 0			; hTemplate
+			push 0			; flags and attributes
+			push OPEN_EXISTING
+			push 0			; lpSecurityAttributes
+			push FILE_SHARE_WRITE
+			push GENERIC_WRITE
+			push device_name
+			call CreateFileA
+			mov [drive_handle], eax
+			cmp eax, INVALID_HANDLE_VALUE
+			jne opedned_for_write
+
+			call print_last_error
+			jmp normal_exit
+
+opedned_for_write:
+
+			push FILE_BEGIN
+			push 0
+			push 0
+			push dword [drive_handle]
+			call SetFilePointer
+			test eax, eax
+			jnz write_error
+
+			push 0			; overlapped
+			push bytes_written
+			push 512
+			push write_buffer
+			push dword [drive_handle]
+			call WriteFile
+			test eax, eax
+			jz write_error
+			cmp dword [bytes_written], 512
+			jne write_error
+
+			push dword [boot_file_handle]
+			call CloseHandle
+
+			mov eax, [output_handle]
+			mov edx, successfully_written
+			mov ecx, successfully_written_end - successfully_written
+			call print_message
+			jmp normal_exit
+
+write_error:
+			call print_last_error
 			push dword [boot_file_handle]
 			call CloseHandle
 
@@ -704,6 +773,7 @@ fs_max_path		dd	0
 fs_serial		dd	0
 total_drive_bytes dd 0, 0
 bytes_read		dd	0
+bytes_written	dd	0
 save_file_handle	dd	0
 boot_file_handle	dd	0
 
@@ -720,10 +790,12 @@ drive_ram		db	'Ram disk '
 sector_read		db	0
 invalid_arguments_msg	db	'Invalid arguments: '
 invalid_arguments_end:
-usage_msg	db	0Dh, 0Ah, 'DeployBootSector.exe [-d <logical drive>] [-r] [-w <boot sector file>]'
-	db	0Dh, 0Ah, '-d <logical drive> - Drive name to work with, such as A,C'
-	db	0Dh, 0Ah, '-r - Read (save) previous boot sector of the drive '
-	db	0Dh, 0Ah, '-w <boot sector file> Deploy specified boot sector from the file to the selected drive'
+usage_msg	db 'DeployBootSector.exe [-d <logical drive>] [-r <save file>] [-w <boot sector file>]', 0Dh, 0Ah,
+	db 'Writes a FAT boot sector taken from <boot sector file> to the specified <logical drive>', 0Dh, 0Ah,
+	db 'Existing boot sector is saved in the <save file>', 0Dh, 0Ah,
+	db	'-d <logical drive> - Drive name to work with, such as A,C,E', 0Dh, 0Ah,
+	db	'-r <save file>- Read (save) previous boot sector of the drive ', 0Dh, 0Ah,
+	db	'-w <boot sector file> Deploy specified boot sector from the file to the selected drive', 0Dh, 0Ah,
 
 usage_msg_end:
 drive_specified_msg	db	'Drive requested: '
@@ -738,6 +810,8 @@ select_drive_msg	db 'Please select the drive name (A-Z) and press Enter', 0Dh, 0
 select_drive_end:
 hex_letters	db	'01234567890ABCDF'
 default_save_file	db	'old.bin', 0
+successfully_written	db	'Boot sector has been successfully written', 0Dh, 0Ah
+successfully_written_end:
 last_error_msg	db	'Last error: '
 last_error_code	db	8 dup(' '), 0Dh, 0Ah
 last_error_end:
