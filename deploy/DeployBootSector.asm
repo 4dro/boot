@@ -468,20 +468,27 @@ copy_type_str:
 			push fs_volume_name
 			push drive_path
 			call GetVolumeInformationA
-			test eax, eax
-			jz info_error
 
 			xor ecx, ecx
+			mov edi, fs_unknown
+			test eax, eax
+			jz copy_volume
+			mov edi, fs_name
 copy_volume:
-			mov al, fs_name[ecx]
+			mov al, [edi + ecx]
 			cmp al, 0
-			je name_ended
-			mov ecx[description_string + 24], al
+			je pad_name_spaces
+			mov [ecx + description_string + 24], al
 			inc ecx
 			cmp ecx, 12
 			jb copy_volume
 
-name_ended:
+pad_name_spaces:
+			lea edi, [ecx + description_string + 24]
+			mov al, ' '
+			neg ecx
+			add ecx, 12
+			rep stosb
 
 info_error:
 			push 0
@@ -824,6 +831,7 @@ description_string:
 description_str_end:
 drive_size_unknown	db '-', 15 dup(' ')
 drive_size_string	db 8 dup(' ')
+fs_unknown	db 'Unknown', 0
 drive_path	db 'A:\', 0
 
 device_name		db	'\\.\'
