@@ -12,9 +12,8 @@ var_data_start		equ	-0Ah
 cached_fat_sector	equ	-6
 var_reserved		equ	-4
 
-        jmp	short actual_start
-; -------------------------------------------------------------------------
-            db 90h			; nop -	not used
+            cld
+            jmp    short actual_start
 
 ; --------------- Bios Parameters Block ------------------------------------
 os_name				db 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'
@@ -40,13 +39,13 @@ fs_name				db 'F', 'A', 'T', '1', '2', ' ', ' ', ' '
 ; ------------------------------------------------------------------------
 
 actual_start:
-            xor		cx, cx
+            xor		ax, ax
 
-            mov		ss, cx
+            mov		ss, ax
             mov		sp, OUR_ADDRESS
             mov		bp, sp
-            mov		es, cx
-            mov		ds, cx
+            mov		es, ax
+            mov		ds, ax
 
             mov		ah, 41h				; DISK - check ext read	support
             mov		bx, 55AAh			; signature
@@ -62,7 +61,6 @@ no_ext_bios:
             xor		cx, cx
             mov		al, byte bp[byte num_of_fats]
             cbw
-            cld
             mul		word bp[byte fat_size]		; dx:ax - fats size in sectors
             xchg	ax, bx
             xchg	dx, si						; si:bx	-> fat size in sectors
@@ -246,10 +244,10 @@ read_one_sector:
             ; cx = 0
             ; dx:ax - next sector address
             ; es:bx -> adjusted to point to next address
-            ; other registers are preserved
+            ; other registers are unchanged
 read_sectors:
 
-            pusha
+            pusha           ; save registers
 
 ; DAP block end
             push    ds		; 0
@@ -264,20 +262,26 @@ read_sectors:
 
 ; convert abs address to cylinders, heads and tracks for ah=2 bios API
             xchg    ax, cx		; save lower address to	cx
-            mov     ax, word bp[byte sec_per_track]
-            xchg    ax, si
+            mov     si, word bp[byte sec_per_track]
             xchg    ax, dx		; higher -> ax
             cwd
-            div     si		; higher address / sectors per track
-            xchg    ax, cx		; store	higher result in cx
-            div     si		; lower	address	/ sectors per track
-            inc     dx
-            xchg    cx, dx		; cx - remainder + 1, dx - higher result
+            ; dx:ax = 0:high address
+            div     si		    ; higher address / sectors per track
+            ; dx = high address % sec_per_track
+            xchg    ax, cx		; cx = high address / sec_per_track
+            ; ax = low address
+            div     si		    ; lower	address	/ sectors per track
+            xchg    cx, dx		; cx - remainder, dx - higher result
+            ; dx:ax = abs address / sec_per_track
+            ; cx = abs address % sec_per_track
             div     word bp [byte num_heads]
+            ; ax - cylinder, cx - sector, dx - head
             mov     dh, dl		; dh - head (remainder of division)
-            mov     ch, al
-            ror     ah, 2
-            or      cl, ah
+
+            xchg    al, ah      ; conver cylinder into bios format
+            shl     al, 6       ; bits 0-7 go to CH, 8-9 to bits 6-7 of CL
+            inc     cx          ; inc sector number because it starts with 1
+            or      cx, ax
 
 bios_read_command:
             ; the following command would be replaced to "mov ax, 4201h" if extended
@@ -296,11 +300,12 @@ bios_read_command:
 
             popa    ; restore all registers
             jc      short disk_error_exit
+
             inc     ax		; increase read	address
             jnz     short no_addr_overflow
             inc     dx
-
 no_addr_overflow:
+
             add     bx, word bp [byte sector_size]
             loop    read_sectors
             retn
@@ -326,8 +331,8 @@ read_one_more:
             call	read_one_sector
 
 take_fat_record:
-            cmp		si, bx
-            jnb		short read_one_more
+            cmp     si, bx
+            jae     short read_one_more
             dec		si
             lodsw			; read next cluster word
             retn
@@ -341,5 +346,5 @@ already_read:
             jmp		short take_fat_record
 ; ---------------------------------------------------------------------------
 replace_disk_msg	db 0Dh,0Ah,'Replace the disk',0
-        db 'DROOPY1', 0
+        db 'DROOPY123', 0
         db 55h,	0AAh
