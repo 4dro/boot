@@ -151,34 +151,37 @@ read_loader_cluster:
             pop		es
             shr		bx, 4
             add		di, bx
-            pop		ax
+            pop		ax          ; ax - cluster
             xor		dx, dx
 
+            ; find next cluster
 fat_type_jump:
             jmp		short fat12_continue
 
 fat12_continue:
+            ; calculate FAT record offset on FAT12
             mov		bx, ax
             shr		bx, 1
+            pushf
+            add		ax, bx		; ax = ax * 1.5
+            ; dx is always 0 here, because maximum offset is 0FFF * 1,5 on FAT12
+            call	next_cluster
+            popf
             jnc		short lower_half_byte
-            call	next_cluster_fat12
             shr		ax, 4
-            jmp		short check_last_fat12
-; ------------------------------------------------------------------------
-
 lower_half_byte:
-            call	next_cluster_fat12
             and		ax, 0FFFh
 
-check_last_fat12:
             cmp		ax, 0FF8h
             jmp		short is_last_cluster
 ; ---------------------------------------------------------------------------
 
 fat16_continue:
+            ; calculate FAT record offset on FAT16
             add	    ax, ax
-            adc	    dx, cx
-            call    next_cluster_fat16
+            adc	    dx, cx  ; fat offset could overflow on FAT16 - 0FFFFh * 2
+
+            call    next_cluster
             cmp     ax, 0FFF8h
 
 is_last_cluster:
@@ -311,11 +314,15 @@ no_addr_overflow:
             retn
 ; ----------------------------------------------------------------------------
 
-next_cluster_fat12:
+; ----------------- Read next cluster record from FAT ------------------------------
+next_cluster:
+            ; cx = 0
+            ; dx:ax - byte offset of the cluster in FAT
+        ; returns
+            ; ax = a word from the specified offset in FAT table
+            ; cx = 0
+            ; bx, dx, si are changed
 
-            add		ax, bx		; ax = ax * 1.5
-
-next_cluster_fat16:
             mov		bx, OUR_ADDRESS + 200h
             div		word bp [byte sector_size]
             lea		si, [bx+1]
@@ -346,5 +353,5 @@ already_read:
             jmp		short take_fat_record
 ; ---------------------------------------------------------------------------
 replace_disk_msg	db 0Dh,0Ah,'Replace the disk',0
-        db 'DROOPY123', 0
+        db 'DROOPY123456', 0
         db 55h,	0AAh
