@@ -22,4 +22,4 @@ Sample OS loaded program. It displays the address at which it is loaded and chec
 ## build
 To compile the files you need NASM assembler compliler. You can download it from https://www.nasm.us.
 The Deploy program also needs a linker - I use GoLink from http://www.godevtool.com
-I encourage you to build the programs by yourself, it easy. You don't have to install anything - just updack compiler and linker archives and update the paths in comp.bat file. Anyway, the binaries are aslo provided for those who not want to build themselves.
+I encourage you to build the programs by yourself, it easy. You don't have to install anything - just unpack compiler and linker archives and update the paths in comp.bat file. Anyway, the binaries are aslo provided for those who not want to build themselves.
