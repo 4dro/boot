@@ -9,7 +9,7 @@ FAT_CACHE_ADDR      equ     OUR_ADDRESS + 200h
 
 SEG_ADDRESS_TO_LOAD equ     2000h
 
-data_start      equ     -0Ah
+data_start          equ     -0Ah
 cached_fat_sector   equ     -6
 fat_start           equ     -4
 
@@ -74,9 +74,9 @@ no_ext_bios:
             add     ax, bx          ; + fat size
             adc     dx, si
             mov     si, word bp[byte root_file_entries]
-            push    ax		; init cached_fat_sector with	root start sector (invalid)
-            push    dx		; put root start (dx:ax) into var_datastart
-            push    ax
+            push    ax      ; init cached_fat_sector with	root start sector (invalid)
+            push    dx
+            push    ax      ; put root start (dx:ax) into var_datastart
             pusha
             xchg    ax, si
             cwd
