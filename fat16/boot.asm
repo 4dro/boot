@@ -3,14 +3,15 @@ BITS 16
 
 segment	'code'
 
-OUR_ADDRESS			equ		7C00h
-ROOT_LOAD_ADDR		equ		OUR_ADDRESS + 0A00h
+OUR_ADDRESS         equ     7C00h
+ROOT_LOAD_ADDR      equ     OUR_ADDRESS + 0A00h
+FAT_CACHE_ADDR      equ     OUR_ADDRESS + 200h
 
-SEG_ADDRESS_TO_LOAD	equ		2000h
+SEG_ADDRESS_TO_LOAD equ     2000h
 
-var_data_start		equ	-0Ah
-cached_fat_sector	equ	-6
-var_reserved		equ	-4
+data_start      equ     -0Ah
+cached_fat_sector   equ     -6
+fat_start           equ     -4
 
             jmp    short actual_start
 cluster_mask        db  0Fh
@@ -58,41 +59,41 @@ actual_start:
 no_ext_bios:
             cld
 ; calculate data start secotor
-            xor		cx, cx
-            mov		al, byte bp[byte num_of_fats]
+            xor     cx, cx
+            mov     al, byte bp[byte num_of_fats]
             cbw
-            mul		word bp[byte fat_size]		; dx:ax - fats size in sectors
-            xchg	ax, bx
-            xchg	dx, si						; si:bx	-> fat size in sectors
-            mov		ax, word bp[byte reserved_sectors]
+            mul     word bp[byte fat_size]		; dx:ax - fats size in sectors
+            xchg    ax, bx
+            mov     si, dx                      ; si:bx -> fat size in sectors
+            mov     ax, word bp[byte reserved_sectors]
             cwd
-            add		ax, word bp[byte hidden_sectors]
-            adc		dx, word bp[byte hidden_sectors+2]
-            push	dx		; put into var_reserved
-            push	ax
-            add		ax, bx		; + fat size
-            adc		dx, si
-            mov		si, word bp[byte root_file_entries]
-            push	ax		; init cached_fat_sector with	root start sector (invalid)
-            push	dx		; put root start (dx:ax) into var_datastart
-            push	ax
+            add     ax, word bp[byte hidden_sectors]
+            adc     dx, word bp[byte hidden_sectors+2]
+            push    dx              ; put into fat_start
+            push    ax
+            add     ax, bx          ; + fat size
+            adc     dx, si
+            mov     si, word bp[byte root_file_entries]
+            push    ax		; init cached_fat_sector with	root start sector (invalid)
+            push    dx		; put root start (dx:ax) into var_datastart
+            push    ax
             pusha
-            xchg	ax, si
+            xchg    ax, si
             cwd
-            shl		ax, 5	; multiply by file entry size (32)
-            mov		bx, word bp[byte sector_size]
-            add		ax, bx
-            dec		ax
-            div		bx		; calculate number of sectors needed for root folder (x + sector_size - 1) / sector size
-            add     word bp[byte var_data_start], ax
-            adc     word bp[byte var_data_start + 2], cx
+            shl     ax, 5	; multiply by file entry size (32)
+            mov     bx, word bp[byte sector_size]
+            add     ax, bx
+            dec     ax
+            div     bx		; calculate number of sectors needed for root folder (x + sector_size - 1) / sector size
+            add     word bp[byte data_start], ax        ; add root size to data_start
+            adc     word bp[byte data_start + 2], cx
 
 ; calculate total number	of data	clusters
             mov     ax, word bp[byte total_sect_low]
             or      ax, word bp[byte total_sect_large]
             mov     dx, word bp[byte total_sect_large + 2]
-            sub     ax, word bp[byte var_data_start]
-            sbb     dx, word bp[byte var_data_start + 2]
+            sub     ax, word bp[byte data_start]
+            sbb     dx, word bp[byte data_start + 2]
             add     ax, word bp[byte hidden_sectors]
             adc     dx, word bp[byte hidden_sectors + 2]
             mov     cl, byte bp[byte sec_per_cluster]
@@ -146,8 +147,8 @@ read_loader_cluster:
             dec		ax
             mov		cl, byte bp[byte sec_per_cluster]
             mul		cx
-            add		ax, word bp[byte var_data_start]
-            adc		dx, word bp[byte var_data_start + 2]
+            add		ax, word bp[byte data_start]
+            adc		dx, word bp[byte data_start + 2]
             push	es
             mov		es, di
             xor		bx, bx
@@ -173,13 +174,13 @@ offset_fat16:
             ; cx = 0
             ; dx:ax - byte offset of the cluster in FAT
 
-            mov     bx, OUR_ADDRESS + 200h
+            mov     bx, FAT_CACHE_ADDR
             div     word bp [byte sector_size]
             lea     si, [bx + 1]
             add     si, dx      ; dx - offset in sector
             cwd
-            add     ax, word bp [byte var_reserved]
-            adc     dx, word bp [byte var_reserved + 2]
+            add     ax, word bp [byte fat_start]
+            adc     dx, word bp [byte fat_start + 2]
             cmp     ax, bp [byte cached_fat_sector]
             jz      short already_read
             mov     bp [byte cached_fat_sector], ax
@@ -281,9 +282,9 @@ read_sectors:
 
 ; DAP block end
             push    ds      ; 0
-            push    ds
+            push    ds      ; 0
             push    dx
-            push    ax		; 8byte	absolute number	of sector
+            push    ax		; 8 byte	absolute number	of sector
             push    es
             push    bx		; address to read to
             push    1		; num sectors
