@@ -160,15 +160,42 @@ read_loader_cluster:
 
 ; --------- find next cluster ----------------------------------------------
             ; calculate FAT record offset on FAT12
-            mov		bx, ax
+            mov     bx, ax
             cmp     byte bp [byte cluster_mask], 0FFh
             je      short offset_fat16      ; c flag = 0 for FAT16 since operands are equal
-            shr		bx, 1                   ; for FAT12, bx = 0,5 * ax
+            shr     bx, 1                   ; for FAT12, bx = 0,5 * ax
 offset_fat16:
             pushf               ; c flag indicates on FAT12 cluster is XXX0h - need shift
             add     ax, bx		; ax = offset in FAT (either ax * 1.5 or ax * 2)
             adc     dx, cx      ; fat16 offset could overflow - 0FFFFh * 2
-            call    next_cluster
+
+; ------------- Get next cluster record from FAT ------------------------------
+            ; cx = 0
+            ; dx:ax - byte offset of the cluster in FAT
+
+            mov     bx, OUR_ADDRESS + 200h
+            div     word bp [byte sector_size]
+            lea     si, [bx + 1]
+            add     si, dx      ; dx - offset in sector
+            cwd
+            add     ax, word bp [byte var_reserved]
+            adc     dx, word bp [byte var_reserved + 2]
+            cmp     ax, bp [byte cached_fat_sector]
+            jz      short already_read
+            mov     bp [byte cached_fat_sector], ax
+
+read_one_more:
+            call    read_one_sector
+
+take_fat_record:
+            ; bx -> pointer to the next sector
+            ; si -> pointer to the record + 1
+            ; on FAT12 it is possible that record is split between two sectors
+            cmp     si, bx
+            jae     short read_one_more
+            dec     si
+            lodsw               ; read next cluster word
+
             popf
             jnc     short lower_half_byte
             shr     ax, 4       ; on fat12 shift 0XXX0h -> 00XXXh
@@ -187,37 +214,6 @@ lower_half_byte:
 
 ; -------------------------------------------------------------------------------
 
-; ----------------- Read next cluster record from FAT ------------------------------
-next_cluster:
-            ; cx = 0
-            ; dx:ax - byte offset of the cluster in FAT
-        ; returns
-            ; ax = a word from the specified offset in FAT table
-            ; cx = 0
-            ; bx, dx, si are changed
-
-            mov		bx, OUR_ADDRESS + 200h
-            div		word bp [byte sector_size]
-            lea		si, [bx+1]
-            add		si, dx
-            cwd
-            add		ax, word bp [byte var_reserved]
-            adc		dx, word bp [byte var_reserved + 2]
-            cmp		ax, bp [byte cached_fat_sector]
-            jz		short already_read
-            mov		bp [byte cached_fat_sector], ax
-
-read_one_more:
-            call	read_one_sector
-
-take_fat_record:
-            cmp     si, bx
-            jae     short read_one_more
-            dec		si
-            lodsw			; read next cluster word
-            retn
-; ----------------------------------------------------------------------------
-
 already_read:
             add     bx, word bp[byte sector_size]
             inc     ax
@@ -235,10 +231,8 @@ message_exit:
 
 print_char:
             lodsb
-            cbw
-            inc     ax
+            test    al, al
             js      short print_replace_disk
-            dec     ax
             jz      short wait_exit
             mov     ah, 0Eh		; video	- display char and move	cursor;	al-char
             mov     bx, 7		; color	7, page	0
@@ -247,12 +241,13 @@ print_char:
 ; --------------------------------------------------------------------------------
 
 disk_error_msg		db 0Dh,	0Ah, 'Disk error'
-; next byte is "int" command (CD) which is > 80h
+; next byte is "cbw" command (98h) which is > 80h
 ; ---------------------------------------------------------------------------
 wait_exit:
-            ; ax is always 0 here
-            int     16h		; ah = 0, wait for a key press
-            int     19h		; reboot the computer
+            ; al is always 0 here
+            cbw
+            int     16h     ; ah = 0, wait for a key press
+            int     19h     ; reboot the computer
 
 ; --------------------------------------------------------------------------
 missing_file_msg    db 0Dh, 0Ah, 'Missing '
@@ -348,5 +343,5 @@ no_addr_overflow:
 ; ----------------------------------------------------------------------------
 
 replace_disk_msg	db 0Dh,0Ah,'Replace the disk',0
-        db 'DROOPY1234567', 0
+        db 'DROOPY12345678901', 0
         db 55h,	0AAh
