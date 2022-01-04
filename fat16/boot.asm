@@ -12,9 +12,8 @@ var_data_start		equ	-0Ah
 cached_fat_sector	equ	-6
 var_reserved		equ	-4
 
-            cld
             jmp    short actual_start
-
+cluster_mask        db  0Fh
 ; --------------- Bios Parameters Block ------------------------------------
 os_name				db 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'
 sector_size			dw 200h
@@ -57,6 +56,7 @@ actual_start:
             mov		byte [OUR_ADDRESS + bios_read_command + 2], 42h
 
 no_ext_bios:
+            cld
 ; calculate data start secotor
             xor		cx, cx
             mov		al, byte bp[byte num_of_fats]
@@ -101,7 +101,7 @@ no_ext_bios:
 ; fat type is defined by number of clusters
             cmp		ax, 0FF5h
             jb		short its_fat12
-            add		byte [fat_type_jump	+ 1 + OUR_ADDRESS], fat16_continue - fat12_continue
+            mov     byte bp[byte cluster_mask], 0FFh
 
 its_fat12:
             popa		; si - number of root entries
@@ -154,40 +154,33 @@ read_loader_cluster:
             pop		ax          ; ax - cluster
             xor		dx, dx
 
-            ; find next cluster
-fat_type_jump:
-            jmp		short fat12_continue
-
-fat12_continue:
+; --------- find next cluster ----------------------------------------------
             ; calculate FAT record offset on FAT12
             mov		bx, ax
-            shr		bx, 1
-            pushf
-            add		ax, bx		; ax = ax * 1.5
-            ; dx is always 0 here, because maximum offset is 0FFF * 1,5 on FAT12
-            call	next_cluster
-            popf
-            jnc		short lower_half_byte
-            shr		ax, 4
-lower_half_byte:
-            and		ax, 0FFFh
-
-            cmp		ax, 0FF8h
-            jmp		short is_last_cluster
-; ---------------------------------------------------------------------------
-
-fat16_continue:
-            ; calculate FAT record offset on FAT16
-            add	    ax, ax
-            adc	    dx, cx  ; fat offset could overflow on FAT16 - 0FFFFh * 2
-
+            cmp     byte bp [byte cluster_mask], 0FFh
+            je      offset_fat16    ; c flag = 0 for FAT16 since operands are equal
+            shr		bx, 1       ; for FAT12, bx = 0,5 ax
+offset_fat16:
+            pushf               ; c flag indicates on FAT12 cluster is XXX0h - need shift
+            add     ax, bx		; ax = offset in FAT (either ax * 1.5 or ax * 2)
+            adc     dx, cx      ; fat16 offset could overflow - 0FFFFh * 2
             call    next_cluster
-            cmp     ax, 0FFF8h
-
-is_last_cluster:
+            popf
+            jnc     short lower_half_byte
+            shr     ax, 4       ; on fat12 shift 0XXX0h -> 00XXXh
+lower_half_byte:
+            mov     bl, 0FFh
+            mov     bh, bp [byte cluster_mask]  ; bx 0FFFFh on FAT16, 0FFFh on FAT12
+            and     ax, bx
+            ; ax - next cluster
+            mov     bl, 0F8h    ; 0FFF8h or 0FF8h
+            cmp     ax, bx      ; is last cluster?
             jb      short read_loader_cluster
+
+; ------------- File is loaded, execute it --------------------------------------------
             mov     dl, bp[byte drive]
             retf            ; jump to 2000:0 - start of the	loader
+
 ; -------------------------------------------------------------------------------
 
 file_not_found:
@@ -219,8 +212,8 @@ disk_error_msg		db 0Dh,	0Ah, 'Disk error'
 
 wait_exit:
             ; ax is always 0 here
-            int	16h		; ah = 0, wait for a key press
-            int	19h		; reboot the computer
+            int     16h		; ah = 0, wait for a key press
+            int     19h		; reboot the computer
 
 ; --------------------------------------------------------------------------
 missing_file_msg	 db 0Dh, 0Ah, 'Missing '
@@ -353,5 +346,5 @@ already_read:
             jmp		short take_fat_record
 ; ---------------------------------------------------------------------------
 replace_disk_msg	db 0Dh,0Ah,'Replace the disk',0
-        db 'DROOPY123456', 0
+        db 'DROOPY1234567', 0
         db 55h,	0AAh
