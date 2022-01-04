@@ -817,7 +817,7 @@ select_drive_msg	db 'Please select the drive name (A-Z) and press Enter', 0Dh, 0
 select_drive_end:
 hex_letters	db	'01234567890ABCDF'
 default_save_file	db	'old.bin', 0
-successfully_written	db	'Boot sector has been successfully written', 0Dh, 0Ah
+successfully_written	db	0Dh, 0Ah, 'Boot sector has been successfully written', 0Dh, 0Ah
 successfully_written_end:
 last_error_msg	db	'Last error: '
 last_error_code	db	8 dup(' '), 0Dh, 0Ah

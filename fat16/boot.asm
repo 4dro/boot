@@ -38,22 +38,22 @@ fs_name				db 'F', 'A', 'T', '1', '2', ' ', ' ', ' '
 ; ------------------------------------------------------------------------
 
 actual_start:
-            xor		ax, ax
+            xor     ax, ax
 
-            mov		ss, ax
-            mov		sp, OUR_ADDRESS
-            mov		bp, sp
-            mov		es, ax
-            mov		ds, ax
+            mov     ss, ax
+            mov     sp, OUR_ADDRESS
+            mov     bp, sp
+            mov     es, ax
+            mov     ds, ax
 
-            mov		ah, 41h				; DISK - check ext read	support
-            mov		bx, 55AAh			; signature
-            mov		bp[byte drive], dl	; rely on drive number sent in dl
-            int		13h
-            jc		short no_ext_bios
-            and		cl, 1
-            jz		short no_ext_bios
-            mov		byte [OUR_ADDRESS + bios_read_command + 2], 42h
+            mov     ah, 41h				; DISK - check ext read	support
+            mov     bx, 55AAh			; signature
+            mov     bp[byte drive], dl	; rely on drive number sent in dl
+            int     13h
+            jc      short no_ext_bios
+            and     cl, 1
+            jz      short no_ext_bios
+            mov     byte [OUR_ADDRESS + bios_read_command + 2], 42h
 
 no_ext_bios:
             cld
@@ -84,57 +84,61 @@ no_ext_bios:
             add		ax, bx
             dec		ax
             div		bx		; calculate number of sectors needed for root folder (x + sector_size - 1) / sector size
-            add		word bp[byte var_data_start], ax
-            adc		word bp[byte var_data_start + 2],	cx
+            add     word bp[byte var_data_start], ax
+            adc     word bp[byte var_data_start + 2], cx
 
 ; calculate total number	of data	clusters
-            mov		ax, word bp[byte total_sect_low]
-            or		ax, word bp[byte total_sect_large]
-            mov		dx, word bp[byte total_sect_large + 2]
-            sub		ax, word bp[byte var_data_start]
-            sbb		dx, word bp[byte var_data_start + 2]
-            add		ax, word bp[byte hidden_sectors]
-            adc		dx, word bp[byte hidden_sectors + 2]
-            mov		cl, byte bp[byte sec_per_cluster]
-            div		cx		; get number of	clusters
+            mov     ax, word bp[byte total_sect_low]
+            or      ax, word bp[byte total_sect_large]
+            mov     dx, word bp[byte total_sect_large + 2]
+            sub     ax, word bp[byte var_data_start]
+            sbb     dx, word bp[byte var_data_start + 2]
+            add     ax, word bp[byte hidden_sectors]
+            adc     dx, word bp[byte hidden_sectors + 2]
+            mov     cl, byte bp[byte sec_per_cluster]
+            div     cx		; get number of	clusters
 
 ; fat type is defined by number of clusters
-            cmp		ax, 0FF5h
-            jb		short its_fat12
+            cmp     ax, 0FF5h
+            jb      short its_fat12
             mov     byte bp[byte cluster_mask], 0FFh
 
 its_fat12:
-            popa		; si - number of root entries
+            popa        ; si - number of root entries
                         ; dx:ax	- root start sector
                         ; cx - 0
 
 read_root:
-            mov		bx, ROOT_LOAD_ADDR
-            mov		di, bx
-            call	read_one_sector
+            mov     bx, ROOT_LOAD_ADDR
+            mov     di, bx
+            call    read_one_sector
 
 next_file:
-            cmp		[di], cl
-            je		short file_not_found
+            cmp     [di], cl
+            je      short file_not_found
             pusha
-            mov		cl, 11
-            mov		si, loader_file_name + OUR_ADDRESS
-            repe	 cmpsb
+            mov     cl, 11
+            mov     si, loader_file_name + OUR_ADDRESS
+            repe    cmpsb
             popa
-            je		short loader_found
-            dec		si
-            jz		short file_not_found
-            add		di, 20h
-            cmp		di, bx
-            jb		short next_file
-            jmp		short read_root
+            je      short loader_found
+            dec     si
+            jz      short file_not_found
+            add     di, 20h         ; file entry size in directory
+            cmp     di, bx
+            jb      short next_file
+            jmp     short read_root
 ; -------------------------------------------------------------------
+file_not_found:
+            mov     al, missing_file_msg - 100h
+            jmp     short message_exit
 
 loader_found:
-            mov		ax, [di+1Ah]	; fist cluster start in	file record
-            mov		di, SEG_ADDRESS_TO_LOAD	; start	address	(segment) to load file to
-            push	di
-            push	cx
+            mov     ax, [di + 1Ah]          ; fist cluster of the file
+            mov     di, SEG_ADDRESS_TO_LOAD ; start address (segment) to load file to
+
+            push    di      ; save the address to jump to
+            push    cx      ; later we will return far to SEG_ADDRESS_TO_LOAD:0
 
 read_loader_cluster:
             push	ax
@@ -158,8 +162,8 @@ read_loader_cluster:
             ; calculate FAT record offset on FAT12
             mov		bx, ax
             cmp     byte bp [byte cluster_mask], 0FFh
-            je      offset_fat16    ; c flag = 0 for FAT16 since operands are equal
-            shr		bx, 1       ; for FAT12, bx = 0,5 ax
+            je      short offset_fat16      ; c flag = 0 for FAT16 since operands are equal
+            shr		bx, 1                   ; for FAT12, bx = 0,5 * ax
 offset_fat16:
             pushf               ; c flag indicates on FAT12 cluster is XXX0h - need shift
             add     ax, bx		; ax = offset in FAT (either ax * 1.5 or ax * 2)
@@ -179,59 +183,94 @@ lower_half_byte:
 
 ; ------------- File is loaded, execute it --------------------------------------------
             mov     dl, bp[byte drive]
-            retf            ; jump to 2000:0 - start of the	loader
+            retf            ; jump to SEG_ADDRESS_TO_LOAD:0 - start of the	loader
 
 ; -------------------------------------------------------------------------------
 
-file_not_found:
-            mov		al, missing_file_msg - 100h
+; ----------------- Read next cluster record from FAT ------------------------------
+next_cluster:
+            ; cx = 0
+            ; dx:ax - byte offset of the cluster in FAT
+        ; returns
+            ; ax = a word from the specified offset in FAT table
+            ; cx = 0
+            ; bx, dx, si are changed
+
+            mov		bx, OUR_ADDRESS + 200h
+            div		word bp [byte sector_size]
+            lea		si, [bx+1]
+            add		si, dx
+            cwd
+            add		ax, word bp [byte var_reserved]
+            adc		dx, word bp [byte var_reserved + 2]
+            cmp		ax, bp [byte cached_fat_sector]
+            jz		short already_read
+            mov		bp [byte cached_fat_sector], ax
+
+read_one_more:
+            call	read_one_sector
+
+take_fat_record:
+            cmp     si, bx
+            jae     short read_one_more
+            dec		si
+            lodsw			; read next cluster word
+            retn
+; ----------------------------------------------------------------------------
+
+already_read:
+            add     bx, word bp[byte sector_size]
+            inc     ax
+            jnz     short take_fat_record
+            inc     dx
+            jmp     short take_fat_record
+; ---------------------------------------------------------------------------
+
+print_replace_disk:
+            mov     al, replace_disk_msg - 100h ; "Replace the disk"
 
 message_exit:
-            mov		ah, 7Dh			; our address + 100h high byte
-            xchg	ax, si
+            mov     ah, 7Dh			; our address + 100h high byte
+            xchg    ax, si
 
 print_char:
             lodsb
             cbw
-            inc		ax
-            js		short print_replace_disk
-            dec		ax
-            jz		short wait_exit
-            mov		ah, 0Eh		; video	- display char and move	cursor;	al-char
-            mov		bx, 7		; color	7, page	0
-            int		10h
-            jmp		short print_char
+            inc     ax
+            js      short print_replace_disk
+            dec     ax
+            jz      short wait_exit
+            mov     ah, 0Eh		; video	- display char and move	cursor;	al-char
+            mov     bx, 7		; color	7, page	0
+            int     10h
+            jmp     short print_char
 ; --------------------------------------------------------------------------------
 
-print_replace_disk:
-            mov		al, replace_disk_msg - 100h ; "Replace the disk"
-            jmp		short message_exit
-; ---------------------------------------------------------------------------
 disk_error_msg		db 0Dh,	0Ah, 'Disk error'
+; next byte is "int" command (CD) which is > 80h
 ; ---------------------------------------------------------------------------
-
 wait_exit:
             ; ax is always 0 here
             int     16h		; ah = 0, wait for a key press
             int     19h		; reboot the computer
 
 ; --------------------------------------------------------------------------
-missing_file_msg	 db 0Dh, 0Ah, 'Missing '
+missing_file_msg    db 0Dh, 0Ah, 'Missing '
 
-loader_file_name	 db 'OSLOADER', 3 dup(' ')
-
+loader_file_name    db 'OSLOADER', 3 dup(' ')
+; next byte is "mov al" command (B0) which is > 80h
 ; ---------------------------------------------------------------------------
 
 disk_error_exit:
-            mov		al, disk_error_msg - 100h
-            jmp		short message_exit
+            mov     al, disk_error_msg - 100h
+            jmp     short message_exit
 
 ; -------------- Read one sector ------------------------------------
             ; expects cx to be 0
             ; rest parameters are the same as for read_sectors
 read_one_sector:
 
-            inc		cx
+            inc     cx
 ; -------------- Read sectors procedure ------------------------------------
             ; es:bx	-> buffer
             ; dx:ax	- address of the sector
@@ -246,7 +285,7 @@ read_sectors:
             pusha           ; save registers
 
 ; DAP block end
-            push    ds		; 0
+            push    ds      ; 0
             push    ds
             push    dx
             push    ax		; 8byte	absolute number	of sector
@@ -305,46 +344,9 @@ no_addr_overflow:
             add     bx, word bp [byte sector_size]
             loop    read_sectors
             retn
+
 ; ----------------------------------------------------------------------------
 
-; ----------------- Read next cluster record from FAT ------------------------------
-next_cluster:
-            ; cx = 0
-            ; dx:ax - byte offset of the cluster in FAT
-        ; returns
-            ; ax = a word from the specified offset in FAT table
-            ; cx = 0
-            ; bx, dx, si are changed
-
-            mov		bx, OUR_ADDRESS + 200h
-            div		word bp [byte sector_size]
-            lea		si, [bx+1]
-            add		si, dx
-            cwd
-            add		ax, word bp [byte var_reserved]
-            adc		dx, word bp [byte var_reserved + 2]
-            cmp		ax, bp [byte cached_fat_sector]
-            jz		short already_read
-            mov		bp [byte cached_fat_sector], ax
-
-read_one_more:
-            call	read_one_sector
-
-take_fat_record:
-            cmp     si, bx
-            jae     short read_one_more
-            dec		si
-            lodsw			; read next cluster word
-            retn
-; ----------------------------------------------------------------------------
-
-already_read:
-            add		bx, word bp[byte sector_size]
-            inc		ax
-            jnz		short take_fat_record
-            inc		dx
-            jmp		short take_fat_record
-; ---------------------------------------------------------------------------
 replace_disk_msg	db 0Dh,0Ah,'Replace the disk',0
         db 'DROOPY1234567', 0
         db 55h,	0AAh
