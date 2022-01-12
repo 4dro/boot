@@ -182,19 +182,30 @@ offset_fat16:
             cwd
             add     ax, word bp [byte fat_start]
             adc     dx, word bp [byte fat_start + 2]
-            cmp     ax, bp [byte cached_fat_sector]
-            jz      short already_read
-            mov     bp [byte cached_fat_sector], ax
 
-read_one_more:
-            call    read_one_sector
+            push    OUR_ADDRESS + take_fat_record           ; cs=0 ??
+            cmp     ax, bp [byte cached_fat_sector]
+            mov     bp [byte cached_fat_sector], ax
+            jnz     short read_one_sector
+
+; -------------------------------------------------
+
+adjust_to_next:
+            inc     ax		; increase read	address
+            jnz     short no_addr_overflow
+            inc     dx
+no_addr_overflow:
+            add     bx, word bp [byte sector_size]
+            retn
 
 take_fat_record:
             ; bx -> pointer to the next sector
             ; si -> pointer to the record + 1
             ; on FAT12 it is possible that record is split between two sectors
             cmp     si, bx
-            jae     short read_one_more
+            jb      short no_fat12_split
+            call    read_one_sector
+no_fat12_split:
             dec     si
             lodsw               ; read next cluster word
 
@@ -214,11 +225,6 @@ lower_half_byte:
             mov     dl, bp[byte drive]
             retf            ; jump to SEG_ADDRESS_TO_LOAD:0 - start of the	loader
 
-; -------------------------------------------------------------------------------
-
-already_read:
-            call    adjust_to_next
-            jmp     short take_fat_record
 ; ---------------------------------------------------------------------------
 
 print_replace_disk:
@@ -353,18 +359,8 @@ increase_values:
 
             jcxz    read_done
             jmp     short read_sectors
-
-; -------------------------------------------------
-
-adjust_to_next:
-            inc     ax		; increase read	address
-            jnz     short no_addr_overflow
-            inc     dx
-no_addr_overflow:
-            add     bx, word bp [byte sector_size]
 read_done:
             retn
-
 ; ----------------------------------------------------------------------------
 
 replace_disk_msg	db 0Dh,0Ah,'Replace the disk',0

@@ -56,7 +56,7 @@
     55 00000055 720B                                jc      short no_ext_bios
     56 00000057 80E101                              and     cl, 1
     57 0000005A 7406                                jz      short no_ext_bios
-    58 0000005C C706[C37D]42EB                      mov     word [OUR_ADDRESS + to_be_changed + 1], 0EB42h
+    58 0000005C C706[C97D]42EB                      mov     word [OUR_ADDRESS + to_be_changed + 1], 0EB42h  ; change command to 42h, and unconditional jump
     59                                  
     60                                  no_ext_bios:
     61 00000062 FC                                  cld
@@ -114,14 +114,14 @@
    113                                  read_root:
    114 000000BD BB0086                              mov     bx, ROOT_LOAD_ADDR
    115 000000C0 89DF                                mov     di, bx
-   116 000000C2 E8D100                              call    read_one_sector
+   116 000000C2 E8D700                              call    read_one_sector
    117                                  
    118                                  next_file:
    119 000000C5 380D                                cmp     [di], cl
    120 000000C7 7417                                je      short file_not_found
    121 000000C9 60                                  pusha
    122 000000CA B10B                                mov     cl, 11
-   123 000000CC BE[877D]                            mov     si, loader_file_name + OUR_ADDRESS
+   123 000000CC BE[8D7D]                            mov     si, loader_file_name + OUR_ADDRESS
    124 000000CF F3A6                                repe    cmpsb
    125 000000D1 61                                  popa
    126 000000D2 7410                                je      short loader_found
@@ -133,8 +133,8 @@
    132 000000DE EBDD                                jmp     short read_root
    133                                  ; -------------------------------------------------------------------
    134                                  file_not_found:
-   135 000000E0 B0[7F]                              mov     al, missing_file_msg - 100h
-   136 000000E2 EB77                                jmp     short message_exit
+   135 000000E0 B0[85]                              mov     al, missing_file_msg - 100h
+   136 000000E2 EB7D                                jmp     short message_exit
    137                                  
    138                                  loader_found:
    139 000000E4 8B451A                              mov     ax, [di + 1Ah]          ; fist cluster of the file
@@ -154,7 +154,7 @@
    153 000000FA 06                                  push	es
    154 000000FB 8EC7                                mov		es, di
    155 000000FD 31DB                                xor		bx, bx
-   156 000000FF E89500                              call	read_sectors
+   156 000000FF E89B00                              call	read_sectors
    157 00000102 07                                  pop		es
    158 00000103 C1EB04                              shr		bx, 4
    159 00000106 01DF                                add		di, bx
@@ -183,194 +183,190 @@
    182 00000125 99                                  cwd
    183 00000126 0346FC                              add     ax, word bp [byte fat_start]
    184 00000129 1356FE                              adc     dx, word bp [byte fat_start + 2]
-   185 0000012C 3B46FA                              cmp     ax, bp [byte cached_fat_sector]
-   186 0000012F 7423                                jz      short already_read
-   187 00000131 8946FA                              mov     bp [byte cached_fat_sector], ax
-   188                                  
-   189                                  read_one_more:
-   190 00000134 E85F00                              call    read_one_sector
-   191                                  
-   192                                  take_fat_record:
-   193                                              ; bx -> pointer to the next sector
-   194                                              ; si -> pointer to the record + 1
-   195                                              ; on FAT12 it is possible that record is split between two sectors
-   196 00000137 39DE                                cmp     si, bx
-   197 00000139 73F9                                jae     short read_one_more
-   198 0000013B 4E                                  dec     si
-   199 0000013C AD                                  lodsw               ; read next cluster word
+   185                                  
+   186 0000012C 68[3F7D]                            push    OUR_ADDRESS + take_fat_record
+   187 0000012F 3B46FA                              cmp     ax, bp [byte cached_fat_sector]
+   188 00000132 8946FA                              mov     bp [byte cached_fat_sector], ax
+   189 00000135 7565                                jnz     short read_one_sector
+   190                                  
+   191                                  ; -------------------------------------------------
+   192                                  
+   193                                  adjust_to_next:
+   194 00000137 40                                  inc     ax		; increase read	address
+   195 00000138 7501                                jnz     short no_addr_overflow
+   196 0000013A 42                                  inc     dx
+   197                                  no_addr_overflow:
+   198 0000013B 035E[0B]                            add     bx, word bp [byte sector_size]
+   199 0000013E C3                                  retn
    200                                  
-   201 0000013D 9D                                  popf
-   202 0000013E 7303                                jnc     short lower_half_byte
-   203 00000140 C1E804                              shr     ax, 4       ; on fat12 shift 0XXX0h -> 00XXXh
-   204                                  lower_half_byte:
-   205 00000143 B3FF                                mov     bl, 0FFh
-   206 00000145 8A7E[02]                            mov     bh, bp [byte cluster_mask]  ; bx 0FFFFh on FAT16, 0FFFh on FAT12
-   207 00000148 21D8                                and     ax, bx
-   208                                              ; ax - next cluster
-   209 0000014A B3F8                                mov     bl, 0F8h    ; 0FFF8h or 0FF8h
-   210 0000014C 39D8                                cmp     ax, bx      ; is last cluster?
-   211 0000014E 729C                                jb      short read_loader_cluster
-   212                                  
-   213                                  ; ------------- File is loaded, execute it --------------------------------------------
-   214 00000150 8A56[24]                            mov     dl, bp[byte drive]
-   215 00000153 CB                                  retf            ; jump to SEG_ADDRESS_TO_LOAD:0 - start of the	loader
-   216                                  
-   217                                  ; -------------------------------------------------------------------------------
-   218                                  
-   219                                  already_read:
-   220 00000154 E88C00                              call    adjust_to_next
-   221 00000157 EBDE                                jmp     short take_fat_record
-   222                                  ; ---------------------------------------------------------------------------
+   201                                  take_fat_record:
+   202                                              ; bx -> pointer to the next sector
+   203                                              ; si -> pointer to the record + 1
+   204                                              ; on FAT12 it is possible that record is split between two sectors
+   205 0000013F 39DE                                cmp     si, bx
+   206 00000141 7203                                jb      short no_fat_split
+   207 00000143 E85600                              call    read_one_sector
+   208                                  no_fat_split:
+   209 00000146 4E                                  dec     si
+   210 00000147 AD                                  lodsw               ; read next cluster word
+   211                                  
+   212 00000148 9D                                  popf
+   213 00000149 7303                                jnc     short lower_half_byte
+   214 0000014B C1E804                              shr     ax, 4       ; on fat12 shift 0XXX0h -> 00XXXh
+   215                                  lower_half_byte:
+   216 0000014E B3FF                                mov     bl, 0FFh
+   217 00000150 8A7E[02]                            mov     bh, bp [byte cluster_mask]  ; bx 0FFFFh on FAT16, 0FFFh on FAT12
+   218 00000153 21D8                                and     ax, bx
+   219                                              ; ax - next cluster
+   220 00000155 B3F8                                mov     bl, 0F8h    ; 0FFF8h or 0FF8h
+   221 00000157 39D8                                cmp     ax, bx      ; is last cluster?
+   222 00000159 7291                                jb      short read_loader_cluster
    223                                  
-   224                                  print_replace_disk:
-   225 00000159 B0[EB]                              mov     al, replace_disk_msg - 100h ; "Replace the disk"
-   226                                  
-   227                                  message_exit:
-   228 0000015B B47D                                mov     ah, 7Dh			; our address + 100h high byte
-   229 0000015D 96                                  xchg    ax, si
-   230                                  
-   231                                  print_char:
-   232 0000015E AC                                  lodsb
-   233 0000015F 84C0                                test    al, al
-   234 00000161 78F6                                js      short print_replace_disk
-   235 00000163 7415                                jz      short wait_exit
-   236 00000165 B40E                                mov     ah, 0Eh		; video	- display char and move	cursor;	al-char
-   237 00000167 BB0700                              mov     bx, 7		; color	7, page	0
-   238 0000016A CD10                                int     10h
-   239 0000016C EBF0                                jmp     short print_char
-   240                                  ; --------------------------------------------------------------------------------
-   241                                  
-   242 0000016E 0D0A4469736B206572-     disk_error_msg      db  0Dh, 0Ah, 'Disk error'
-   242 00000177 726F72             
-   243                                  ; next byte is "cbw" command (98h) which is > 80h
-   244                                  ; ---------------------------------------------------------------------------
-   245                                  wait_exit:
-   246                                              ; al is always 0 here
-   247 0000017A 98                                  cbw
-   248 0000017B CD16                                int     16h     ; ah = 0, wait for a key press
-   249 0000017D CD19                                int     19h     ; reboot the computer
-   250                                  
-   251                                  ; --------------------------------------------------------------------------
-   252 0000017F 4D697373696E6720        missing_file_msg    db 'Missing '
-   253                                  
-   254 00000187 4F534C4F4144455220-     loader_file_name    db 'OSLOADER', 3 dup(' ')
-   254 00000190 2020               
-   255                                  ; next byte is "mov al" command (B0) which is > 80h
-   256                                  ; ---------------------------------------------------------------------------
-   257                                  
-   258                                  disk_error_exit:
-   259 00000192 B0[6E]                              mov     al, disk_error_msg - 100h
-   260 00000194 EBC5                                jmp     short message_exit
-   261                                  
-   262                                  ; -------------- Read one sector ------------------------------------
-   263                                              ; expects cx to be 0
-   264                                              ; rest parameters are the same as for read_sectors
-   265                                  read_one_sector:
-   266                                  
-   267 00000196 41                                  inc     cx
-   268                                  ; -------------- Read sectors procedure ------------------------------------
-   269                                              ; es:bx	-> buffer
-   270                                              ; dx:ax	- address of the sector
-   271                                              ; cx - number of sectors to read
-   272                                          ; on return:
-   273                                              ; cx = 0
-   274                                              ; dx:ax - next sector address
-   275                                              ; es:bx -> adjusted to point to next address
-   276                                              ; other registers are unchanged
-   277                                  read_sectors:
-   278                                  
-   279 00000197 60                                  pusha           ; save registers
-   280                                  
-   281                                  ; DAP block end
-   282 00000198 1E                                  push    ds      ; 0
-   283 00000199 1E                                  push    ds      ; 0
-   284 0000019A 52                                  push    dx
-   285 0000019B 50                                  push    ax		; 8 byte	absolute number	of sector
-   286 0000019C 06                                  push    es
-   287 0000019D 53                                  push    bx		; address to read to
-   288 0000019E 51                                  push    cx		; num sectors
-   289 0000019F 6A10                                push    10h		; DAP block size
-   290                                  ; DAP block start
-   291                                  
-   292 000001A1 53                                  push    bx
-   293 000001A2 51                                  push    cx
-   294                                  
-   295                                  ; convert abs address to cylinders, heads and tracks for ah=2 bios API
-   296 000001A3 91                                  xchg    ax, cx		; save lower address to	cx
-   297 000001A4 8B5E[18]                            mov     bx, word bp[byte sec_per_track]
-   298 000001A7 92                                  xchg    ax, dx		; higher -> ax
-   299 000001A8 99                                  cwd
-   300                                              ; dx:ax = 0:high address
-   301 000001A9 F7F3                                div     bx		    ; higher address / sectors per track
-   302                                              ; dx = high address % sec_per_track
-   303 000001AB 91                                  xchg    ax, cx		; cx = high address / sec_per_track
-   304                                              ; ax = low address
-   305 000001AC F7F3                                div     bx		    ; lower	address	/ sectors per track
-   306                                  
-   307 000001AE 29D3                                sub     bx, dx      ; bx - sectors remaining on the track
-   308                                  
-   309 000001B0 87CA                                xchg    cx, dx		; cx - remainder, dx - higher result
-   310                                              ; dx:ax = abs address / sec_per_track
-   311                                              ; cx = abs address % sec_per_track
-   312 000001B2 F776[1A]                            div     word bp [byte num_heads]
-   313                                              ; ax - cylinder, cx - sector, dx - head
-   314 000001B5 88D6                                mov     dh, dl		; dh - head (remainder of division)
-   315                                  
-   316 000001B7 86C4                                xchg    al, ah      ; conver cylinder into bios format
-   317 000001B9 C0E006                              shl     al, 6       ; bits 0-7 go to CH, 8-9 to bits 6-7 of CL
-   318 000001BC 41                                  inc     cx          ; inc sector number because it starts with 1
-   319 000001BD 09C1                                or      cx, ax
-   320                                  
+   224                                  ; ------------- File is loaded, execute it --------------------------------------------
+   225 0000015B 8A56[24]                            mov     dl, bp[byte drive]
+   226 0000015E CB                                  retf            ; jump to SEG_ADDRESS_TO_LOAD:0 - start of the	loader
+   227                                  
+   228                                  ; ---------------------------------------------------------------------------
+   229                                  
+   230                                  print_replace_disk:
+   231 0000015F B0[EA]                              mov     al, replace_disk_msg - 100h ; "Replace the disk"
+   232                                  
+   233                                  message_exit:
+   234 00000161 B47D                                mov     ah, 7Dh			; our address + 100h high byte
+   235 00000163 96                                  xchg    ax, si
+   236                                  
+   237                                  print_char:
+   238 00000164 AC                                  lodsb
+   239 00000165 84C0                                test    al, al
+   240 00000167 78F6                                js      short print_replace_disk
+   241 00000169 7415                                jz      short wait_exit
+   242 0000016B B40E                                mov     ah, 0Eh		; video	- display char and move	cursor;	al-char
+   243 0000016D BB0700                              mov     bx, 7		; color	7, page	0
+   244 00000170 CD10                                int     10h
+   245 00000172 EBF0                                jmp     short print_char
+   246                                  ; --------------------------------------------------------------------------------
+   247                                  
+   248 00000174 0D0A4469736B206572-     disk_error_msg      db  0Dh, 0Ah, 'Disk error'
+   248 0000017D 726F72             
+   249                                  ; next byte is "cbw" command (98h) which is > 80h
+   250                                  ; ---------------------------------------------------------------------------
+   251                                  wait_exit:
+   252                                              ; al is always 0 here
+   253 00000180 98                                  cbw
+   254 00000181 CD16                                int     16h     ; ah = 0, wait for a key press
+   255 00000183 CD19                                int     19h     ; reboot the computer
+   256                                  
+   257                                  ; --------------------------------------------------------------------------
+   258 00000185 4D697373696E6720        missing_file_msg    db 'Missing '
+   259                                  
+   260 0000018D 4F534C4F4144455220-     loader_file_name    db 'OSLOADER', 3 dup(' ')
+   260 00000196 2020               
+   261                                  ; next byte is "mov al" command (B0) which is > 80h
+   262                                  ; ---------------------------------------------------------------------------
+   263                                  
+   264                                  disk_error_exit:
+   265 00000198 B0[74]                              mov     al, disk_error_msg - 100h
+   266 0000019A EBC5                                jmp     short message_exit
+   267                                  
+   268                                  ; -------------- Read one sector ------------------------------------
+   269                                              ; expects cx to be 0
+   270                                              ; rest parameters are the same as for read_sectors
+   271                                  read_one_sector:
+   272                                  
+   273 0000019C 41                                  inc     cx
+   274                                  ; -------------- Read sectors procedure ------------------------------------
+   275                                              ; es:bx	-> buffer
+   276                                              ; dx:ax	- address of the sector
+   277                                              ; cx - number of sectors to read
+   278                                          ; on return:
+   279                                              ; cx = 0
+   280                                              ; dx:ax - next sector address
+   281                                              ; es:bx -> adjusted to point to next address
+   282                                              ; other registers are unchanged
+   283                                  read_sectors:
+   284                                  
+   285 0000019D 60                                  pusha           ; save registers
+   286                                  
+   287                                  ; DAP block end
+   288 0000019E 1E                                  push    ds      ; 0
+   289 0000019F 1E                                  push    ds      ; 0
+   290 000001A0 52                                  push    dx
+   291 000001A1 50                                  push    ax		; 8 byte	absolute number	of sector
+   292 000001A2 06                                  push    es
+   293 000001A3 53                                  push    bx		; address to read to
+   294 000001A4 51                                  push    cx		; num sectors
+   295 000001A5 6A10                                push    10h		; DAP block size
+   296                                  ; DAP block start
+   297                                  
+   298 000001A7 53                                  push    bx
+   299 000001A8 51                                  push    cx
+   300                                  
+   301                                  ; convert abs address to cylinders, heads and tracks for ah=2 bios API
+   302 000001A9 91                                  xchg    ax, cx		; save lower address to	cx
+   303 000001AA 8B5E[18]                            mov     bx, word bp[byte sec_per_track]
+   304 000001AD 92                                  xchg    ax, dx		; higher -> ax
+   305 000001AE 99                                  cwd
+   306                                              ; dx:ax = 0:high address
+   307 000001AF F7F3                                div     bx		    ; higher address / sectors per track
+   308                                              ; dx = high address % sec_per_track
+   309 000001B1 91                                  xchg    ax, cx		; cx = high address / sec_per_track
+   310                                              ; ax = low address
+   311 000001B2 F7F3                                div     bx		    ; lower	address	/ sectors per track
+   312                                  
+   313 000001B4 29D3                                sub     bx, dx      ; bx - sectors remaining on the track
+   314                                  
+   315 000001B6 87CA                                xchg    cx, dx		; cx - remainder, dx - higher result
+   316                                              ; dx:ax = abs address / sec_per_track
+   317                                              ; cx = abs address % sec_per_track
+   318 000001B8 F776[1A]                            div     word bp [byte num_heads]
+   319                                              ; ax - cylinder, cx - sector, dx - head
+   320 000001BB 88D6                                mov     dh, dl		; dh - head (remainder of division)
    321                                  
-   322 000001BF 58                                  pop     ax
-   323                                              ; ax - requested number
-   324                                              ; bx - allowed number to read for ah=02
-   325 000001C0 39D8                                cmp     ax, bx
-   326                                  to_be_changed:
-   327 000001C2 B402                                mov     ah, 02h             ; would be replaced with "mov ah, 42h"
-   328 000001C4 7602                                jbe     short fit_or_ext    ; would be replaced with "jmp short fit_or_ext"
-   329 000001C6 88D8                                mov     al, bl
-   330                                  fit_or_ext:
-   331 000001C8 5B                                  pop     bx
-   332 000001C9 8846[25]                            mov     byte bp [byte actually_read], al
-   333                                  
-   334 000001CC 89E6                                mov     si, sp		; pointer to DAP packet	in stack
-   335 000001CE 8A56[24]                            mov     dl, bp[byte drive]
-   336                                  
-   337                                      		; DISK - READ SECTORS INTO MEMORY
-   338                                              ; AL = number of sectors to read, CH = track, CL = sector
-   339                                              ; DH = head, DL	= drive, ES:BX -> buffer to fill
-   340                                              ; Return: CF set on error, AH =	status,	AL = number of sectors read
-   341 000001D1 CD13                                int     13h
+   322 000001BD 86C4                                xchg    al, ah      ; conver cylinder into bios format
+   323 000001BF C0E006                              shl     al, 6       ; bits 0-7 go to CH, 8-9 to bits 6-7 of CL
+   324 000001C2 41                                  inc     cx          ; inc sector number because it starts with 1
+   325 000001C3 09C1                                or      cx, ax
+   326                                  
+   327                                  
+   328 000001C5 58                                  pop     ax
+   329                                              ; ax - requested number
+   330                                              ; bx - allowed number to read for ah=02
+   331 000001C6 39D8                                cmp     ax, bx
+   332                                  to_be_changed:
+   333 000001C8 B402                                mov     ah, 02h             ; would be replaced with "mov ah, 42h"
+   334 000001CA 7602                                jbe     short fit_or_ext    ; would be replaced with "jmp short fit_or_ext"
+   335 000001CC 88D8                                mov     al, bl
+   336                                  fit_or_ext:
+   337 000001CE 5B                                  pop     bx
+   338 000001CF 8846[25]                            mov     byte bp [byte actually_read], al
+   339                                  
+   340 000001D2 89E6                                mov     si, sp		; pointer to DAP packet	in stack
+   341 000001D4 8A56[24]                            mov     dl, bp[byte drive]
    342                                  
-   343 000001D3 61                                  popa    ; release DAP block from stack (same as add sp, 10h)
-   344                                  
-   345 000001D4 61                                  popa    ; restore all registers
-   346 000001D5 72BB                                jc      short disk_error_exit
-   347                                  
-   348                                              ; cx - number requested
-   349                                  increase_values:
-   350 000001D7 E80900                              call    adjust_to_next
-   351 000001DA FE4E[25]                            dec     byte bp [byte actually_read]
-   352 000001DD E0F8                                loopnz    increase_values
+   343                                      		; DISK - READ SECTORS INTO MEMORY
+   344                                              ; AL = number of sectors to read, CH = track, CL = sector
+   345                                              ; DH = head, DL	= drive, ES:BX -> buffer to fill
+   346                                              ; Return: CF set on error, AH =	status,	AL = number of sectors read
+   347 000001D7 CD13                                int     13h
+   348                                  
+   349 000001D9 61                                  popa    ; release DAP block from stack (same as add sp, 10h)
+   350                                  
+   351 000001DA 61                                  popa    ; restore all registers
+   352 000001DB 72BB                                jc      short disk_error_exit
    353                                  
-   354 000001DF E309                                jcxz    read_done
-   355 000001E1 EBB4                                jmp     short read_sectors
-   356                                  
-   357                                  ; -------------------------------------------------
-   358                                  
-   359                                  adjust_to_next:
-   360 000001E3 40                                  inc     ax		; increase read	address
-   361 000001E4 7501                                jnz     short no_addr_overflow
-   362 000001E6 42                                  inc     dx
-   363                                  no_addr_overflow:
-   364 000001E7 035E[0B]                            add     bx, word bp [byte sector_size]
-   365                                  read_done:
-   366 000001EA C3                                  retn
-   367                                  
-   368                                  ; ----------------------------------------------------------------------------
-   369                                  
-   370 000001EB 0D0A5265706C616365-     replace_disk_msg	db 0Dh,0Ah,'Replace the disk',0
-   370 000001F4 20746865206469736B-
-   370 000001FD 00                 
-   371 000001FE 55AA                            db 55h,	0AAh
+   354                                              ; cx - number of sectors requested
+   355                                  increase_values:
+   356 000001DD E857FF                              call    adjust_to_next
+   357 000001E0 FE4E[25]                            dec     byte bp [byte actually_read]
+   358 000001E3 E0F8                                loopnz    increase_values
+   359                                  
+   360 000001E5 E302                                jcxz    read_done
+   361 000001E7 EBB4                                jmp     short read_sectors
+   362                                  read_done:
+   363 000001E9 C3                                  retn
+   364                                  ; ----------------------------------------------------------------------------
+   365                                  
+   366 000001EA 0D0A5265706C616365-     replace_disk_msg	db 0Dh,0Ah,'Replace the disk',0
+   366 000001F3 20746865206469736B-
+   366 000001FC 00                 
+   367 000001FD 55AA                            db 55h,	0AAh
