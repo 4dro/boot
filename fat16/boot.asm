@@ -30,6 +30,7 @@ num_heads			dw 2
 hidden_sectors		dd 0
 total_sect_large	dd 0
 drive				db 0
+actually_read:
 not_used			db 0
 nt_signature		db 29h
 volume_serial		dd 12345678h
@@ -54,7 +55,7 @@ actual_start:
             jc      short no_ext_bios
             and     cl, 1
             jz      short no_ext_bios
-            mov     byte [OUR_ADDRESS + bios_read_command + 2], 42h
+            mov     word [OUR_ADDRESS + to_be_changed + 1], 0EB42h  ; change command to 42h, and unconditional jump
 
 no_ext_bios:
             cld
@@ -216,10 +217,7 @@ lower_half_byte:
 ; -------------------------------------------------------------------------------
 
 already_read:
-            add     bx, word bp[byte sector_size]
-            inc     ax
-            jnz     short take_fat_record
-            inc     dx
+            call    adjust_to_next
             jmp     short take_fat_record
 ; ---------------------------------------------------------------------------
 
@@ -227,7 +225,7 @@ print_replace_disk:
             mov     al, replace_disk_msg - 100h ; "Replace the disk"
 
 message_exit:
-            mov     ah, 7Dh			; our address + 100h high byte
+            mov     ah, 7Dh     ; our address + 100h high byte
             xchg    ax, si
 
 print_char:
@@ -241,7 +239,7 @@ print_char:
             jmp     short print_char
 ; --------------------------------------------------------------------------------
 
-disk_error_msg		db 0Dh,	0Ah, 'Disk error'
+disk_error_msg      db  'Disk error'
 ; next byte is "cbw" command (98h) which is > 80h
 ; ---------------------------------------------------------------------------
 wait_exit:
@@ -251,7 +249,7 @@ wait_exit:
             int     19h     ; reboot the computer
 
 ; --------------------------------------------------------------------------
-missing_file_msg    db 0Dh, 0Ah, 'Missing '
+missing_file_msg    db 'Missing '
 
 loader_file_name    db 'OSLOADER', 3 dup(' ')
 ; next byte is "mov al" command (B0) which is > 80h
@@ -284,24 +282,30 @@ read_sectors:
             push    ds      ; 0
             push    ds      ; 0
             push    dx
-            push    ax		; 8 byte	absolute number	of sector
+            push    ax		; 8 byte absolute number of sector
             push    es
             push    bx		; address to read to
-            push    1		; num sectors
+            push    cx		; num sectors
             push    10h		; DAP block size
 ; DAP block start
 
+            push    bx
+            push    cx
+
 ; convert abs address to cylinders, heads and tracks for ah=2 bios API
             xchg    ax, cx		; save lower address to	cx
-            mov     si, word bp[byte sec_per_track]
+            mov     bx, word bp[byte sec_per_track]
             xchg    ax, dx		; higher -> ax
             cwd
             ; dx:ax = 0:high address
-            div     si		    ; higher address / sectors per track
+            div     bx		    ; higher address / sectors per track
             ; dx = high address % sec_per_track
             xchg    ax, cx		; cx = high address / sec_per_track
             ; ax = low address
-            div     si		    ; lower	address	/ sectors per track
+            div     bx		    ; lower	address	/ sectors per track
+
+            sub     bx, dx      ; bx - sectors remaining on the track
+
             xchg    cx, dx		; cx - remainder, dx - higher result
             ; dx:ax = abs address / sec_per_track
             ; cx = abs address % sec_per_track
@@ -314,10 +318,25 @@ read_sectors:
             inc     cx          ; inc sector number because it starts with 1
             or      cx, ax
 
-bios_read_command:
-            ; the following command would be replaced to "mov ax, 4201h" if extended
-            ; bios read is supported
-            mov     ax, 201h
+
+            pop     ax
+            ; I have concerns about crossing physical 64K segment boundary
+            ; (1000:0, 2000:0, etc) with ah=02 API
+            ; remove following "mov bl, 1" command if your BIOS supports this
+            ; so we still read 1 sector with ah=02
+            ; although track crossing restriction is passed
+            mov     bl, 1
+            ; ax - requested number of sectors
+            ; bx - allowed number to read for ah=02
+            cmp     ax, bx
+to_be_changed:
+            mov     ah, 02h             ; would be replaced with "mov ah, 42h"
+            jbe     short fit_or_ext    ; would be replaced with "jmp short fit_or_ext"
+            mov     al, bl
+fit_or_ext:
+            pop     bx
+            mov     byte bp [byte actually_read], al
+
             mov     si, sp		; pointer to DAP packet	in stack
             mov     dl, bp[byte drive]
 
@@ -332,17 +351,27 @@ bios_read_command:
             popa    ; restore all registers
             jc      short disk_error_exit
 
+            ; cx - number of sectors requested
+increase_values:
+            call    adjust_to_next
+            dec     byte bp [byte actually_read]
+            loopnz    increase_values
+
+            jcxz    read_done
+            jmp     short read_sectors
+
+; -------------------------------------------------
+
+adjust_to_next:
             inc     ax		; increase read	address
             jnz     short no_addr_overflow
             inc     dx
 no_addr_overflow:
-
             add     bx, word bp [byte sector_size]
-            loop    read_sectors
+read_done:
             retn
 
 ; ----------------------------------------------------------------------------
 
 replace_disk_msg	db 0Dh,0Ah,'Replace the disk',0
-        db 'DROOPY12345678901', 0
-        db 55h,	0AAh
+        db  55h, 0AAh
