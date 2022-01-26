@@ -225,7 +225,7 @@ print_replace_disk:
             mov     al, replace_disk_msg - 100h ; "Replace the disk"
 
 message_exit:
-            mov     ah, 7Dh			; our address + 100h high byte
+            mov     ah, 7Dh     ; our address + 100h high byte
             xchg    ax, si
 
 print_char:
@@ -239,7 +239,7 @@ print_char:
             jmp     short print_char
 ; --------------------------------------------------------------------------------
 
-disk_error_msg      db  0Dh, 0Ah, 'Disk error'
+disk_error_msg      db  'Disk error'
 ; next byte is "cbw" command (98h) which is > 80h
 ; ---------------------------------------------------------------------------
 wait_exit:
@@ -282,7 +282,7 @@ read_sectors:
             push    ds      ; 0
             push    ds      ; 0
             push    dx
-            push    ax		; 8 byte	absolute number	of sector
+            push    ax		; 8 byte absolute number of sector
             push    es
             push    bx		; address to read to
             push    cx		; num sectors
@@ -320,7 +320,13 @@ read_sectors:
 
 
             pop     ax
-            ; ax - requested number
+            ; I have concerns about crossing physical 64K segment boundary
+            ; (1000:0, 2000:0, etc) with ah=02 API
+            ; remove following "mov bl, 1" command if your BIOS supports this
+            ; so we still read 1 sector with ah=02
+            ; although track crossing restriction is passed
+            mov     bl, 1
+            ; ax - requested number of sectors
             ; bx - allowed number to read for ah=02
             cmp     ax, bx
 to_be_changed:
@@ -368,4 +374,4 @@ read_done:
 ; ----------------------------------------------------------------------------
 
 replace_disk_msg	db 0Dh,0Ah,'Replace the disk',0
-        db 55h,	0AAh
+        db  55h, 0AAh
